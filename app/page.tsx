@@ -233,6 +233,10 @@ function makeDefaultName(index: number): string {
   return `配置${index}`;
 }
 
+function makeNameFromBaseUrlAndModel(baseUrl: string, model: string): string {
+  return [baseUrl.trim(), model.trim()].filter(Boolean).join(" + ");
+}
+
 function isCcSwitchApp(value: string): value is CcSwitchApp {
   return ["claude", "codex", "gemini", "opencode", "openclaw"].includes(value);
 }
@@ -442,6 +446,28 @@ function parseObjectConfig(item: unknown): Partial<FormState> {
   };
 }
 
+function parseEnvConfig(item: unknown): Partial<FormState> {
+  if (!isRecord(item) || !isRecord(item.env)) return {};
+
+  const env = item.env as Record<string, unknown>;
+  const baseUrl = env.ANTHROPIC_BASE_URL ? normalizeBaseUrl(String(env.ANTHROPIC_BASE_URL)) : "";
+  const apiKey = env.ANTHROPIC_AUTH_TOKEN ? cleanKey(String(env.ANTHROPIC_AUTH_TOKEN)) : "";
+  const model =
+    env.ANTHROPIC_MODEL ??
+    env.ANTHROPIC_DEFAULT_OPUS_MODEL ??
+    env.ANTHROPIC_DEFAULT_SONNET_MODEL ??
+    env.ANTHROPIC_DEFAULT_HAIKU_MODEL ??
+    env.ANTHROPIC_REASONING_MODEL;
+  const normalizedModel = model ? normalizeParsedModelValue(String(model)) : "";
+
+  return {
+    name: makeNameFromBaseUrlAndModel(baseUrl, normalizedModel),
+    baseUrl,
+    apiKey,
+    model: normalizedModel
+  };
+}
+
 function parseCcSwitchDeepLink(input: string): Partial<ParsedConfig> | null {
   const text = input.trim();
   if (!/^ccswitch:\/\/v1\/import\?/i.test(text)) return null;
@@ -590,6 +616,9 @@ function parsePastedConfigs(input: string, startIndex: number): ParsedConfig[] {
 
     const fromCcSwitchJson = finalizeParsed(source.map(parseCcSwitchProviderObject), startIndex);
     if (fromCcSwitchJson.length > 0) return fromCcSwitchJson;
+
+    const fromEnvJson = finalizeParsed(source.map(parseEnvConfig), startIndex);
+    if (fromEnvJson.length > 0) return fromEnvJson;
 
     const fromJson = finalizeParsed(source.map(parseObjectConfig), startIndex);
     if (fromJson.length > 0) return fromJson;
@@ -2033,7 +2062,7 @@ export default function Home() {
       setNotice("请至少填写地址、Key、模型中的一个");
       return;
     }
-    if (!name) name = makeDefaultName(nextIndex);
+    if (!name) name = makeNameFromBaseUrlAndModel(baseUrl, model) || makeDefaultName(nextIndex);
 
     addItem(name, baseUrl, apiKey, model, formSourceMeta);
     setNotice("保存成功");
