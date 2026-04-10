@@ -12,6 +12,7 @@ import {
   FaCopy,
   FaEdit,
   FaExchangeAlt,
+  FaExternalLinkAlt,
   FaFileExport,
   FaGithub,
   FaInfoCircle,
@@ -1331,7 +1332,12 @@ function buildCcSwitchDeepLink(item: KeyConfig, app: CcSwitchApp): string {
   const params = new URLSearchParams();
   params.set("resource", "provider");
   params.set("app", app);
-  params.set("name", item.name || "AI Key Vault");
+
+  const exportName = item.model
+    ? `${item.name} + ${item.model.trim()}`
+    : (item.name || "AI Key Vault");
+  params.set("name", exportName);
+
   if (item.baseUrl) params.set("endpoint", normalizeBaseUrl(item.baseUrl));
   if (item.apiKey) params.set("apiKey", cleanKey(item.apiKey));
   if (item.model) params.set("model", item.model.trim());
