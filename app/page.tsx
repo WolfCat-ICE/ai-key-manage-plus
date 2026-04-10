@@ -52,14 +52,7 @@ type KeyConfig = {
     detail?: string;
     testedAt: string;
   };
-  lastTest?: {
-    status: "success" | "error";
-    message: string;
-    detail?: string;
-    responseText?: string;
-    responseSource?: "stream" | "chat" | "responses";
-    testedAt: string;
-  };
+  lastTest?: LastTestDisplay;
   benchmarks?: Record<string, FinishedModelBenchmarkResult>;
 };
 
@@ -80,9 +73,17 @@ type TestResult = {
   detail?: string;
   responseText?: string;
   responseSource?: "stream" | "chat" | "responses";
+  elapsedMs?: number;
+  firstTokenMs?: number;
   testedAt?: string;
 };
 type FinishedTestResult = NonNullable<KeyConfig["lastTest"]>;
+
+type LastTestDisplay = {
+  testedAt: string;
+  status: "success" | "error";
+  elapsedMs?: number;
+};
 type ProbeResult = {
   status: TestStatus;
   supportedModels: string[];
@@ -2991,7 +2992,15 @@ export default function Home() {
             <input
               className={inputClass}
               value={form.baseUrl}
-              onChange={(e) => setForm((prev) => ({ ...prev, baseUrl: e.target.value }))}
+              onChange={(e) => {
+                const newBaseUrl = e.target.value;
+                setForm((prev) => {
+                  const autoName = !prev.name.trim() && newBaseUrl.trim()
+                    ? newBaseUrl.trim().replace(/^https?:\/\//, "")
+                    : prev.name;
+                  return { ...prev, baseUrl: newBaseUrl, name: autoName };
+                });
+              }}
               placeholder="例如：https://api.openai.com"
               required
             />

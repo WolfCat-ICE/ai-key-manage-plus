@@ -15,6 +15,8 @@ export type OpenAIProxyTestResponse = {
     detail?: string;
     responseText?: string;
     responseSource?: "stream" | "chat" | "responses";
+    elapsedMs?: number;
+    firstTokenMs?: number;
     testedAt: string;
   };
 };

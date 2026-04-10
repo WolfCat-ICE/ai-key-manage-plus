@@ -743,9 +743,11 @@ export async function runOpenAITest(input: OpenAIProxyTestRequest): Promise<Open
       result: {
         status: "success",
         message: PASS_TEXT,
-        detail: bestResponse.text ? `接口连通，已收到对“你是谁”的简短回复（${sourceLabel}）` : "返回消息正常",
+        detail: bestResponse.text ? `接口连通，已收到对"你是谁"的简短回复（${sourceLabel}）` : "返回消息正常",
         responseText: bestResponse.text || undefined,
         responseSource: bestResponse.source,
+        elapsedMs: bestResponse.elapsedMs,
+        firstTokenMs: "firstTokenMs" in bestResponse ? bestResponse.firstTokenMs : undefined,
         testedAt,
       },
     };
