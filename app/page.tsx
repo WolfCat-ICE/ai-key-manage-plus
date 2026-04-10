@@ -243,7 +243,7 @@ function makeDefaultName(index: number): string {
 }
 
 function makeNameFromBaseUrlAndModel(baseUrl: string, model: string): string {
-  return [baseUrl.trim(), model.trim()].filter(Boolean).join(" + ");
+  return baseUrl.trim().replace(/^https?:\/\//, "");
 }
 
 function isCcSwitchApp(value: string): value is CcSwitchApp {
