@@ -754,6 +754,8 @@ export async function runOpenAITest(input: OpenAIProxyTestRequest): Promise<Open
   }
 
   const response = attempts[0];
+  const elapsedMs =
+    [...attempts].sort((left, right) => left.elapsedMs - right.elapsedMs)[0]?.elapsedMs ?? response?.elapsedMs;
 
   return {
     ok: false,
@@ -761,6 +763,7 @@ export async function runOpenAITest(input: OpenAIProxyTestRequest): Promise<Open
       status: "error",
       message: FAIL_TEXT,
       detail: response?.error || uniqueStrings(attempts.map((item) => item.error || ""))[0] || "未返回消息内容",
+      elapsedMs,
       testedAt,
     },
   };

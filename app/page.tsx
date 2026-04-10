@@ -889,12 +889,21 @@ function normalizeFinishedTestResult(input: unknown): FinishedTestResult | undef
 
   if (!testedAt) return undefined;
 
+  const elapsedMs =
+    typeof input.elapsedMs === "number" && Number.isFinite(input.elapsedMs) ? Math.max(0, Math.round(input.elapsedMs)) : undefined;
+  const firstTokenMs =
+    typeof input.firstTokenMs === "number" && Number.isFinite(input.firstTokenMs)
+      ? Math.max(0, Math.round(input.firstTokenMs))
+      : undefined;
+
   return {
     status,
     message: message || (status === "success" ? PASS_TEXT : FAIL_TEXT),
     detail: detail || undefined,
     responseText: responseText || undefined,
     responseSource,
+    elapsedMs,
+    firstTokenMs,
     testedAt
   };
 }
@@ -2318,7 +2327,10 @@ export default function Home() {
         45000
       );
 
-      commitFinishedTestResult(item.id, response.result);
+      commitFinishedTestResult(item.id, {
+        ...response.result,
+        elapsedMs: response.result.status === "success" ? response.elapsedMs : undefined
+      });
       return response.ok;
     } catch (error: unknown) {
       commitFinishedTestResult(item.id, {
@@ -3099,6 +3111,14 @@ export default function Home() {
               {filteredConfigs.map((item) => {
                 const testing = loadingMap[item.id];
                 const result = resultMap[item.id] || item.lastTest || defaultTestResult();
+                const lastTestElapsedMs =
+                  item.lastTest?.status === "success"
+                    ? item.lastTest.elapsedMs ?? (result.status === "success" ? result.elapsedMs : undefined)
+                    : undefined;
+                const lastTestFirstTokenMs =
+                  item.lastTest?.status === "success"
+                    ? item.lastTest.firstTokenMs ?? (result.status === "success" ? result.firstTokenMs : undefined)
+                    : undefined;
                 const probe = probeMap[item.id] || item.probe || defaultProbeResult();
                 const isEditing = editingId === item.id;
                 const isEditingModel = editingModelId === item.id;
@@ -3306,7 +3326,16 @@ export default function Home() {
                               {item.lastTest?.testedAt ? (
                                 <span className="text-xs text-zinc-500">
                                   上次测试：{toDateTimeLabel(item.lastTest.testedAt)}（
-                                  {item.lastTest.status === "success" ? "通过" : "失败"}）
+                                  {item.lastTest.status === "success" ? "通过" : "失败"}
+                                  {item.lastTest.status === "success" && typeof lastTestElapsedMs === "number"
+                                    ? `，响应时长 ${formatDurationLabel(lastTestElapsedMs)}`
+                                    : item.lastTest.status === "error" && typeof item.lastTest.elapsedMs === "number"
+                                      ? `，响应时长 ${formatDurationLabel(item.lastTest.elapsedMs)}`
+                                      : ""}
+                                  {item.lastTest.status === "success" && typeof lastTestFirstTokenMs === "number"
+                                    ? `，首字时间 ${formatDurationLabel(lastTestFirstTokenMs)}`
+                                    : ""}
+                                  ）
                                 </span>
                               ) : null}
                             </div>
