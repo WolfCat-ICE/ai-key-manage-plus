@@ -145,6 +145,14 @@ type BenchmarkSummary = {
   recommendedModel?: string;
   finishedAt: string;
 };
+type BenchmarkRankingEntry = {
+  model: string;
+  configName: string;
+  medianMs: number;
+  firstTokenMedianMs?: number;
+  successRate?: number;
+  testedAt: string;
+};
 type ParsedConfig = FormState & {
   sourceMeta?: KeyConfig["sourceMeta"];
 };
@@ -1106,6 +1114,38 @@ function collectFinishedBenchmarks(item: KeyConfig, runtimeBenchmarks?: Record<s
   );
 }
 
+function buildBenchmarkRankingEntry(
+  configName: string,
+  benchmark: FinishedModelBenchmarkResult
+): BenchmarkRankingEntry | null {
+  if (!benchmark.speed || typeof benchmark.speed.medianMs !== "number") return null;
+
+  return {
+    model: benchmark.model,
+    configName,
+    medianMs: benchmark.speed.medianMs,
+    firstTokenMedianMs: benchmark.speed.firstTokenMedianMs,
+    successRate: benchmark.speed.successRate,
+    testedAt: benchmark.testedAt
+  };
+}
+
+function sortBenchmarkRankingEntries(entries: BenchmarkRankingEntry[]): BenchmarkRankingEntry[] {
+  return [...entries].sort((left, right) => {
+    if (left.medianMs !== right.medianMs) return left.medianMs - right.medianMs;
+
+    const leftFirstToken = left.firstTokenMedianMs ?? Number.POSITIVE_INFINITY;
+    const rightFirstToken = right.firstTokenMedianMs ?? Number.POSITIVE_INFINITY;
+    if (leftFirstToken !== rightFirstToken) return leftFirstToken - rightFirstToken;
+
+    const leftSuccessRate = left.successRate ?? 0;
+    const rightSuccessRate = right.successRate ?? 0;
+    if (leftSuccessRate !== rightSuccessRate) return rightSuccessRate - leftSuccessRate;
+
+    return new Date(right.testedAt).getTime() - new Date(left.testedAt).getTime();
+  });
+}
+
 function buildBenchmarkSummary(
   configId: string,
   results: FinishedModelBenchmarkResult[],
@@ -1356,10 +1396,18 @@ function makeErrorDetail(error: unknown): string {
   return `${detail}；接口返回：${raw}`;
 }
 
+function makeClientId(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `cfg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function normalizeStoredConfigItem(input: unknown, index: number): KeyConfig | undefined {
   if (!isRecord(input)) return undefined;
 
-  const id = typeof input.id === "string" && input.id ? input.id : crypto.randomUUID();
+  const id = typeof input.id === "string" && input.id ? input.id : makeClientId();
   const rawName = firstNonEmptyString(input.name, input.title, input.label);
   const baseUrl = normalizeBaseUrl(
     firstNonEmptyString(input.baseUrl, input.baseURL, input.url, input.endpoint, input.apiBaseUrl, input.api_url)
@@ -1488,6 +1536,8 @@ export default function Home() {
   const [ccSwitchTargetApp, setCcSwitchTargetApp] = useState<CcSwitchApp>("codex");
   const [probeDialogId, setProbeDialogId] = useState<string | null>(null);
   const [benchmarkDialogId, setBenchmarkDialogId] = useState<string | null>(null);
+  const [configSearch, setConfigSearch] = useState("");
+  const [configStatusFilter, setConfigStatusFilter] = useState<"all" | TestStatus>("all");
   const [benchmarkSearch, setBenchmarkSearch] = useState("");
   const [benchmarkRoundsInput, setBenchmarkRoundsInput] = useState(String(DEFAULT_BENCHMARK_ROUNDS));
   const [selectedProbeModels, setSelectedProbeModels] = useState<string[]>([]);
@@ -1527,6 +1577,20 @@ export default function Home() {
   }, [notice]);
 
   const nextIndex = useMemo(() => configs.length + 1, [configs.length]);
+  const filteredConfigs = useMemo(() => {
+    const query = configSearch.trim().toLowerCase();
+
+    return configs.filter((item) => {
+      const result = resultMap[item.id] || item.lastTest || defaultTestResult();
+      const matchesSearch =
+        !query ||
+        item.name.toLowerCase().includes(query) ||
+        item.baseUrl.toLowerCase().includes(query) ||
+        item.model.toLowerCase().includes(query);
+      const matchesStatus = configStatusFilter === "all" || result.status === configStatusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [configSearch, configStatusFilter, configs, resultMap]);
   const ccSwitchDialogItem = useMemo(
     () => configs.find((item) => item.id === ccSwitchDialogId) || null,
     [configs, ccSwitchDialogId]
@@ -1839,6 +1903,16 @@ export default function Home() {
       ]
     };
   }, [activeBenchmarkChartResult]);
+  const configBenchmarkRanking = useMemo(() => {
+    return sortBenchmarkRankingEntries(
+      filteredConfigs.flatMap((item) => {
+        const runtimeBenchmarks = benchmarkMap[item.id] || {};
+        return collectFinishedBenchmarks(item, runtimeBenchmarks)
+          .map((benchmark) => buildBenchmarkRankingEntry(item.name || item.model || "未命名配置", benchmark))
+          .filter((entry): entry is BenchmarkRankingEntry => Boolean(entry));
+      })
+    );
+  }, [benchmarkMap, filteredConfigs]);
 
   useEffect(() => {
     if (!benchmarkDialogItem) return;
@@ -2013,7 +2087,7 @@ export default function Home() {
 
   function addItem(name: string, baseUrl: string, apiKey: string, model: string, sourceMeta?: KeyConfig["sourceMeta"]) {
     const item: KeyConfig = {
-      id: crypto.randomUUID(),
+      id: makeClientId(),
       name,
       baseUrl,
       apiKey,
@@ -2035,7 +2109,7 @@ export default function Home() {
     }
 
     const newItems: KeyConfig[] = parsed.map((item) => ({
-      id: crypto.randomUUID(),
+      id: makeClientId(),
       name: item.name,
       baseUrl: item.baseUrl,
       apiKey: item.apiKey,
@@ -2832,7 +2906,7 @@ export default function Home() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-5xl space-y-3 px-3 py-4 text-zinc-900 sm:px-4">
+    <main className="mx-auto w-full max-w-[1600px] space-y-3 px-3 py-4 text-zinc-900 sm:px-4">
       <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="flex items-center gap-2.5 text-2xl font-bold tracking-tight text-zinc-900 sm:text-3xl">
@@ -2871,49 +2945,7 @@ export default function Home() {
         </a>
       </header>
 
-      <section className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 via-emerald-50/70 to-white p-3.5 shadow-sm">
-        <button
-          type="button"
-          className="flex w-full items-start justify-between gap-3 text-left"
-          onClick={() => setIntroExpanded((prev) => !prev)}
-          aria-expanded={introExpanded}
-          aria-label={introExpanded ? "收起介绍" : "展开介绍"}
-        >
-          <div>
-            <p className="text-base font-extrabold text-emerald-900 sm:text-lg">这是你的 AI API Key 本地保险箱</p>
-            <p className="mt-1 text-xs font-medium text-emerald-700/90">
-              {introExpanded ? "点击收起说明" : "包含本地保存、后端代理与使用说明；点击展开"}
-            </p>
-          </div>
-          <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-white/80 text-emerald-700">
-            {introExpanded ? <FaChevronUp aria-hidden /> : <FaChevronDown aria-hidden />}
-          </span>
-        </button>
-
-        {introExpanded ? (
-          <>
-            <p className="mt-2 text-sm leading-6 text-emerald-800">
-              统一管理名称、地址、Key 和模型，支持一键测试、模型识别、性能评测和唤起 CC Switch；配置数据默认仅保存在当前浏览器本地。
-            </p>
-            <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50/80 p-3">
-              <div className="flex items-start gap-2.5">
-                <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-amber-200 bg-white text-amber-700">
-                  <FaInfoCircle aria-hidden />
-                </span>
-                <div className="space-y-1">
-                  <p className="text-sm font-semibold text-amber-900">请求说明</p>
-                  <p className="text-sm leading-6 text-amber-900/90">
-                    连通性测试、模型识别、性能评测这类真实联网请求会通过同源后端发起，避免浏览器直连部分上游接口时被 CORS 拦截。
-                  </p>
-                </div>
-              </div>
-            </div>
-            <p className="mt-2 text-xs font-medium text-emerald-700/90">单条配置支持直接导出到 CC Switch。</p>
-          </>
-        ) : null}
-      </section>
-
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+      <div className="grid gap-3 xl:grid-cols-[minmax(18rem,0.75fr)_minmax(0,1.35fr)_320px] xl:items-start">
         <section className="rounded-2xl border border-zinc-200 bg-white p-3.5 shadow-sm sm:p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 className="text-base font-semibold text-zinc-900">新增配置</h2>
@@ -2990,6 +3022,28 @@ export default function Home() {
             <div className="flex items-center gap-1.5">
               <h2 className="text-base font-semibold whitespace-nowrap text-zinc-900">配置列表</h2>
               <HelpHint text={endpointHintText} />
+              <span className="text-xs text-zinc-500">
+                {filteredConfigs.length} / {configs.length}
+              </span>
+            </div>
+            <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_180px]">
+              <input
+                className={inputClass}
+                value={configSearch}
+                onChange={(e) => setConfigSearch(e.target.value)}
+                placeholder="搜索名称 / 地址 / 模型"
+              />
+              <select
+                className={inputClass}
+                value={configStatusFilter}
+                onChange={(e) => setConfigStatusFilter(e.target.value as "all" | TestStatus)}
+              >
+                <option value="all">全部状态</option>
+                <option value="idle">未测试</option>
+                <option value="pending">测试中</option>
+                <option value="success">成功</option>
+                <option value="error">失败</option>
+              </select>
             </div>
             <div className="flex w-full flex-wrap items-center gap-2 pb-1">
               <button type="button" className={topBtnPrimary} onClick={testAllConfigs} disabled={testingAll}>
@@ -3023,9 +3077,11 @@ export default function Home() {
 
           {configs.length === 0 ? (
             <p className="text-sm text-zinc-500">暂无配置</p>
+          ) : filteredConfigs.length === 0 ? (
+            <p className="text-sm text-zinc-500">当前筛选条件下无结果</p>
           ) : (
             <ul className="grid gap-2.5">
-              {configs.map((item) => {
+              {filteredConfigs.map((item) => {
                 const testing = loadingMap[item.id];
                 const result = resultMap[item.id] || item.lastTest || defaultTestResult();
                 const probe = probeMap[item.id] || item.probe || defaultProbeResult();
@@ -3402,6 +3458,43 @@ export default function Home() {
             </ul>
           )}
         </section>
+
+        <aside className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3 shadow-sm xl:sticky xl:top-4">
+          <div>
+            <p className="text-sm font-semibold text-emerald-900">成功测速排行榜</p>
+            <p className="mt-1 text-xs text-emerald-700">按中位耗时从快到慢排序，仅展示测试成功的模型</p>
+          </div>
+
+          {configBenchmarkRanking.length > 0 ? (
+            <div className="mt-3 grid gap-2">
+              {configBenchmarkRanking.map((entry, index) => (
+                <div
+                  key={`${entry.configName}-${entry.model}-${entry.testedAt}`}
+                  className="grid gap-2 rounded-xl border border-white/80 bg-white/90 p-3 shadow-sm"
+                >
+                  <div className="inline-flex w-fit items-center justify-center rounded-full bg-zinc-900 px-3 py-1 text-sm font-semibold text-white">
+                    #{index + 1}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-zinc-900">{entry.model}</p>
+                    <p className="mt-1 truncate text-xs text-zinc-600">配置：{entry.configName}</p>
+                  </div>
+                  <div className="grid gap-1 text-left">
+                    <p className="text-sm font-semibold text-emerald-700">{formatDurationLabel(entry.medianMs)}</p>
+                    <div className="text-[11px] text-zinc-500">
+                      {typeof entry.firstTokenMedianMs === "number" ? <p>首字：{formatDurationLabel(entry.firstTokenMedianMs)}</p> : null}
+                      {typeof entry.successRate === "number" ? <p>成功率：{formatSuccessRateLabel(entry.successRate)}</p> : null}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-3 rounded-xl border border-dashed border-emerald-200 bg-white/70 px-3 py-4 text-sm text-emerald-800">
+              暂无测速数据，请先进行性能评测
+            </div>
+          )}
+        </aside>
       </div>
 
       {ccSwitchDialogItem ? (
