@@ -2945,7 +2945,7 @@ export default function Home() {
         </a>
       </header>
 
-      <div className="grid gap-3 xl:grid-cols-[minmax(18rem,0.75fr)_minmax(0,1.35fr)_320px] xl:items-start">
+      <div className="grid gap-3 xl:grid-cols-[minmax(16rem,0.6fr)_minmax(0,1.35fr)_380px] xl:items-start">
         <section className="rounded-2xl border border-zinc-200 bg-white p-3.5 shadow-sm sm:p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 className="text-base font-semibold text-zinc-900">新增配置</h2>
@@ -3167,6 +3167,16 @@ export default function Home() {
                                 disabled={!item.baseUrl}
                               >
                                 <FaCopy aria-hidden />
+                              </button>
+                              <button
+                                type="button"
+                                className={iconCopyBtn}
+                                onClick={() => item.baseUrl && window.open(item.baseUrl, "_blank", "noopener,noreferrer")}
+                                title="在新标签页打开"
+                                aria-label="在新标签页打开"
+                                disabled={!item.baseUrl}
+                              >
+                                <FaExternalLinkAlt aria-hidden />
                               </button>
                             </div>
                           </div>
@@ -3470,18 +3480,22 @@ export default function Home() {
               {configBenchmarkRanking.map((entry, index) => (
                 <div
                   key={`${entry.configName}-${entry.model}-${entry.testedAt}`}
-                  className="grid gap-2 rounded-xl border border-white/80 bg-white/90 p-3 shadow-sm"
+                  className="flex items-start gap-3 rounded-xl border border-white/80 bg-white/90 p-3 shadow-sm"
                 >
-                  <div className="inline-flex w-fit items-center justify-center rounded-full bg-zinc-900 px-3 py-1 text-sm font-semibold text-white">
-                    #{index + 1}
+                  <div className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-sm font-semibold text-white">
+                    {index + 1}
                   </div>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-zinc-900">{entry.model}</p>
-                    <p className="mt-1 truncate text-xs text-zinc-600">配置：{entry.configName}</p>
-                  </div>
-                  <div className="grid gap-1 text-left">
-                    <p className="text-sm font-semibold text-emerald-700">{formatDurationLabel(entry.medianMs)}</p>
-                    <div className="text-[11px] text-zinc-500">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-zinc-900">{entry.model}</p>
+                        <p className="mt-0.5 truncate text-xs text-zinc-600">配置：{entry.configName}</p>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className="text-sm font-semibold text-emerald-700">{formatDurationLabel(entry.medianMs)}</p>
+                      </div>
+                    </div>
+                    <div className="mt-1 flex items-center gap-3 text-[11px] text-zinc-500">
                       {typeof entry.firstTokenMedianMs === "number" ? <p>首字：{formatDurationLabel(entry.firstTokenMedianMs)}</p> : null}
                       {typeof entry.successRate === "number" ? <p>成功率：{formatSuccessRateLabel(entry.successRate)}</p> : null}
                     </div>
