@@ -1268,6 +1268,12 @@ function toDateTimeLabel(iso: string): string {
   }).format(d);
 }
 
+function toMonthDayHourMinuteLabel(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "未知时间";
+  return `${d.getMonth() + 1}-${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 function defaultProbeResult(): ProbeResult {
   return { status: "idle", supportedModels: [] };
 }
@@ -3540,6 +3546,7 @@ export default function Home() {
                       </div>
                     </div>
                     <div className="mt-1 flex items-center gap-3 text-[11px] text-zinc-500">
+                      <p>测试：{toMonthDayHourMinuteLabel(entry.testedAt)}</p>
                       {typeof entry.firstTokenMedianMs === "number" ? <p>首字：{formatDurationLabel(entry.firstTokenMedianMs)}</p> : null}
                       {typeof entry.successRate === "number" ? <p>成功率：{formatSuccessRateLabel(entry.successRate)}</p> : null}
                     </div>
