@@ -83,6 +83,7 @@ type LastTestDisplay = {
   testedAt: string;
   status: "success" | "error";
   elapsedMs?: number;
+  firstTokenMs?: number;
 };
 type ProbeResult = {
   status: TestStatus;
@@ -150,10 +151,12 @@ type BenchmarkSummary = {
 type BenchmarkRankingEntry = {
   model: string;
   configName: string;
+  configId: string;
   medianMs: number;
   firstTokenMedianMs?: number;
   successRate?: number;
   testedAt: string;
+  source: "benchmark" | "test";
 };
 type ParsedConfig = FormState & {
   sourceMeta?: KeyConfig["sourceMeta"];
@@ -1126,6 +1129,7 @@ function collectFinishedBenchmarks(item: KeyConfig, runtimeBenchmarks?: Record<s
 }
 
 function buildBenchmarkRankingEntry(
+  configId: string,
   configName: string,
   benchmark: FinishedModelBenchmarkResult
 ): BenchmarkRankingEntry | null {
@@ -1134,10 +1138,32 @@ function buildBenchmarkRankingEntry(
   return {
     model: benchmark.model,
     configName,
+    configId,
     medianMs: benchmark.speed.medianMs,
     firstTokenMedianMs: benchmark.speed.firstTokenMedianMs,
     successRate: benchmark.speed.successRate,
-    testedAt: benchmark.testedAt
+    testedAt: benchmark.testedAt,
+    source: "benchmark"
+  };
+}
+
+function buildTestRankingEntry(
+  configId: string,
+  configName: string,
+  model: string,
+  testResult: FinishedTestResult
+): BenchmarkRankingEntry | null {
+  if (testResult.status !== "success" || typeof testResult.elapsedMs !== "number") return null;
+
+  return {
+    model,
+    configName,
+    configId,
+    medianMs: testResult.elapsedMs,
+    firstTokenMedianMs: testResult.firstTokenMs,
+    successRate: undefined,
+    testedAt: testResult.testedAt,
+    source: "test"
   };
 }
 
@@ -1344,19 +1370,20 @@ function inferCcSwitchHomepage(endpoint: string): string {
   }
 }
 
-function buildCcSwitchDeepLink(item: KeyConfig, app: CcSwitchApp): string {
+function buildCcSwitchDeepLink(item: KeyConfig, app: CcSwitchApp, overrideModel?: string): string {
   const params = new URLSearchParams();
   params.set("resource", "provider");
   params.set("app", app);
 
-  const exportName = item.model
-    ? `${item.name} + ${item.model.trim()}`
+  const modelToUse = overrideModel || item.model;
+  const exportName = modelToUse
+    ? `${item.name} + ${modelToUse.trim()}`
     : (item.name || "AI Key Vault");
   params.set("name", exportName);
 
   if (item.baseUrl) params.set("endpoint", normalizeBaseUrl(item.baseUrl));
   if (item.apiKey) params.set("apiKey", cleanKey(item.apiKey));
-  if (item.model) params.set("model", item.model.trim());
+  if (modelToUse) params.set("model", modelToUse.trim());
 
   const homepage = inferCcSwitchHomepage(item.baseUrl);
   if (homepage) params.set("homepage", homepage);
@@ -1555,11 +1582,14 @@ export default function Home() {
   const [editingModelId, setEditingModelId] = useState<string | null>(null);
   const [modelDraft, setModelDraft] = useState("");
   const [ccSwitchDialogId, setCcSwitchDialogId] = useState<string | null>(null);
-  const [ccSwitchTargetApp, setCcSwitchTargetApp] = useState<CcSwitchApp>("codex");
+  const [ccSwitchTargetApp, setCcSwitchTargetApp] = useState<CcSwitchApp>("claude");
+  const [ccSwitchOverrideModel, setCcSwitchOverrideModel] = useState<string | null>(null);
   const [probeDialogId, setProbeDialogId] = useState<string | null>(null);
   const [benchmarkDialogId, setBenchmarkDialogId] = useState<string | null>(null);
   const [configSearch, setConfigSearch] = useState("");
   const [configStatusFilter, setConfigStatusFilter] = useState<"all" | TestStatus>("all");
+  const [rankingFilter, setRankingFilter] = useState<"all" | "test" | "benchmark">("all");
+  const [rankingSearch, setRankingSearch] = useState("");
   const [benchmarkSearch, setBenchmarkSearch] = useState("");
   const [benchmarkRoundsInput, setBenchmarkRoundsInput] = useState(String(DEFAULT_BENCHMARK_ROUNDS));
   const [selectedProbeModels, setSelectedProbeModels] = useState<string[]>([]);
@@ -1569,6 +1599,12 @@ export default function Home() {
   const [benchmarkListCollapsed, setBenchmarkListCollapsed] = useState(false);
   const [benchmarkDetailModel, setBenchmarkDetailModel] = useState("");
   const [introExpanded, setIntroExpanded] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    show: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
 
   useEffect(() => {
     const { configs: restoredConfigs, sourceKey } = loadConfigsFromStorage(localStorage);
@@ -1926,15 +1962,37 @@ export default function Home() {
     };
   }, [activeBenchmarkChartResult]);
   const configBenchmarkRanking = useMemo(() => {
-    return sortBenchmarkRankingEntries(
-      filteredConfigs.flatMap((item) => {
-        const runtimeBenchmarks = benchmarkMap[item.id] || {};
-        return collectFinishedBenchmarks(item, runtimeBenchmarks)
-          .map((benchmark) => buildBenchmarkRankingEntry(item.name || item.model || "未命名配置", benchmark))
-          .filter((entry): entry is BenchmarkRankingEntry => Boolean(entry));
+    const benchmarkEntries = filteredConfigs.flatMap((item) => {
+      const runtimeBenchmarks = benchmarkMap[item.id] || {};
+      return collectFinishedBenchmarks(item, runtimeBenchmarks)
+        .map((benchmark) => buildBenchmarkRankingEntry(item.id, item.name || item.model || "未命名配置", benchmark))
+        .filter((entry): entry is BenchmarkRankingEntry => Boolean(entry));
+    });
+
+    const testEntries = filteredConfigs
+      .map((item) => {
+        const testResult = resultMap[item.id] || item.lastTest;
+        if (!testResult) return null;
+        return buildTestRankingEntry(item.id, item.name || item.model || "未命名配置", item.model, testResult);
       })
-    );
-  }, [benchmarkMap, filteredConfigs]);
+      .filter((entry): entry is BenchmarkRankingEntry => Boolean(entry));
+
+    const allEntries = [...benchmarkEntries, ...testEntries];
+
+    const filteredByType = rankingFilter === "all"
+      ? allEntries
+      : allEntries.filter(entry => entry.source === rankingFilter);
+
+    const searchLower = rankingSearch.toLowerCase().trim();
+    const filteredBySearch = searchLower
+      ? filteredByType.filter(entry =>
+          entry.model.toLowerCase().includes(searchLower) ||
+          entry.configName.toLowerCase().includes(searchLower)
+        )
+      : filteredByType;
+
+    return sortBenchmarkRankingEntries(filteredBySearch);
+  }, [benchmarkMap, filteredConfigs, resultMap, rankingFilter, rankingSearch]);
 
   useEffect(() => {
     if (!benchmarkDialogItem) return;
@@ -2160,6 +2218,25 @@ export default function Home() {
     }
     if (!name) name = makeNameFromBaseUrlAndModel(baseUrl, model) || makeDefaultName(nextIndex);
 
+    // 检查是否存在完全相同的配置（名称+地址+key）
+    const duplicate = configs.find(
+      (c) => c.name === name && c.baseUrl === baseUrl && c.apiKey === apiKey
+    );
+
+    if (duplicate) {
+      setConfirmDialog({
+        show: true,
+        title: "检测到重复配置",
+        message: `已存在相同的配置：\n\n名称：${name}\n地址：${baseUrl}\nKey：${apiKey.slice(0, 10)}...\n\n是否仍要添加？`,
+        onConfirm: () => {
+          addItem(name, baseUrl, apiKey, model, formSourceMeta);
+          setNotice("保存成功");
+          setConfirmDialog(null);
+        }
+      });
+      return;
+    }
+
     addItem(name, baseUrl, apiKey, model, formSourceMeta);
     setNotice("保存成功");
   }
@@ -2335,7 +2412,8 @@ export default function Home() {
 
       commitFinishedTestResult(item.id, {
         ...response.result,
-        elapsedMs: response.result.status === "success" ? response.elapsedMs : undefined
+        elapsedMs: response.result.status === "success" ? response.result.elapsedMs : undefined,
+        firstTokenMs: response.result.status === "success" ? response.result.firstTokenMs : undefined
       });
       return response.ok;
     } catch (error: unknown) {
@@ -2699,26 +2777,29 @@ export default function Home() {
     downloadText(filename, content);
   }
 
-  function openCcSwitchDialog(item: KeyConfig) {
+  function openCcSwitchDialog(item: KeyConfig, overrideModel?: string) {
     if (!item.baseUrl || !item.apiKey) {
       setNotice("导入到 CC Switch 需要完整的地址和 Key");
       return;
     }
     setCcSwitchDialogId(item.id);
-    setCcSwitchTargetApp(item.sourceMeta?.ccSwitchApp || "codex");
+    setCcSwitchTargetApp(item.sourceMeta?.ccSwitchApp || "claude");
+    setCcSwitchOverrideModel(overrideModel || null);
   }
 
   function closeCcSwitchDialog() {
     setCcSwitchDialogId(null);
+    setCcSwitchOverrideModel(null);
   }
 
   async function copyCcSwitchLink(item: KeyConfig, app: CcSwitchApp) {
-    await copyText(buildCcSwitchDeepLink(item, app), `已复制 CC Switch 链接（${app}）`);
+    await copyText(buildCcSwitchDeepLink(item, app, ccSwitchOverrideModel || undefined), `已复制 CC Switch 链接（${app}）`);
   }
 
   function importToCcSwitch(item: KeyConfig, app: CcSwitchApp) {
-    const link = buildCcSwitchDeepLink(item, app);
+    const link = buildCcSwitchDeepLink(item, app, ccSwitchOverrideModel || undefined);
     setCcSwitchDialogId(null);
+    setCcSwitchOverrideModel(null);
     window.location.assign(link);
     setNotice(`已尝试唤起 CC Switch（${app}）`);
   }
@@ -3540,38 +3621,89 @@ export default function Home() {
             <p className="mt-1 text-xs text-emerald-700">按中位耗时从快到慢排序，仅展示测试成功的模型</p>
           </div>
 
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {[
+              { label: "全部排行", value: "all" },
+              { label: "普通测试", value: "test" },
+              { label: "性能测试", value: "benchmark" }
+            ].map((option) => {
+              const active = rankingFilter === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setRankingFilter(option.value as "all" | "test" | "benchmark")}
+                  className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                    active
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-800"
+                  }`}
+                  aria-pressed={active}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-3">
+            <input
+              type="text"
+              placeholder="搜索模型或配置名称..."
+              value={rankingSearch}
+              onChange={(e) => setRankingSearch(e.target.value)}
+              className={inputClass}
+            />
+          </div>
+
           {configBenchmarkRanking.length > 0 ? (
             <div className="mt-3 grid gap-2">
-              {configBenchmarkRanking.map((entry, index) => (
-                <div
-                  key={`${entry.configName}-${entry.model}-${entry.testedAt}`}
-                  className="flex items-start gap-3 rounded-xl border border-white/80 bg-white/90 p-3 shadow-sm"
-                >
-                  <div className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-sm font-semibold text-white">
-                    {index + 1}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-zinc-900">{entry.model}</p>
-                        <p className="mt-0.5 truncate text-xs text-zinc-600">配置：{entry.configName}</p>
+              {configBenchmarkRanking.map((entry, index) => {
+                const config = configs.find(c => c.id === entry.configId);
+                return (
+                  <div
+                    key={`${entry.configName}-${entry.model}-${entry.testedAt}`}
+                    className="flex items-start gap-3 rounded-xl border border-white/80 bg-white/90 p-3 shadow-sm"
+                  >
+                    <div className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-sm font-semibold text-white">
+                      {index + 1}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-semibold text-zinc-900">{entry.model}</p>
+                          <div className="mt-0.5 flex items-center gap-2">
+                            <p className="truncate text-xs text-zinc-600">配置：{entry.configName}</p>
+                            {config && config.baseUrl && config.apiKey ? (
+                              <button
+                                type="button"
+                                className="inline-flex shrink-0 items-center gap-1 rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 transition hover:bg-emerald-100"
+                                onClick={() => openCcSwitchDialog(config, entry.model)}
+                                title="导出到 CC Switch"
+                              >
+                                <FaExternalLinkAlt aria-hidden />
+                                <span>导出</span>
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <p className="text-sm font-semibold text-emerald-700">{formatDurationLabel(entry.medianMs)}</p>
+                        </div>
                       </div>
-                      <div className="shrink-0 text-right">
-                        <p className="text-sm font-semibold text-emerald-700">{formatDurationLabel(entry.medianMs)}</p>
+                      <div className="mt-1 flex items-center gap-3 text-[11px] text-zinc-500">
+                        <p>测试：{toMonthDayHourMinuteLabel(entry.testedAt)}</p>
+                        {typeof entry.firstTokenMedianMs === "number" ? <p>首字：{formatDurationLabel(entry.firstTokenMedianMs)}</p> : null}
+                        {typeof entry.successRate === "number" ? <p>成功率：{formatSuccessRateLabel(entry.successRate)}</p> : null}
                       </div>
                     </div>
-                    <div className="mt-1 flex items-center gap-3 text-[11px] text-zinc-500">
-                      <p>测试：{toMonthDayHourMinuteLabel(entry.testedAt)}</p>
-                      {typeof entry.firstTokenMedianMs === "number" ? <p>首字：{formatDurationLabel(entry.firstTokenMedianMs)}</p> : null}
-                      {typeof entry.successRate === "number" ? <p>成功率：{formatSuccessRateLabel(entry.successRate)}</p> : null}
-                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div className="mt-3 rounded-xl border border-dashed border-emerald-200 bg-white/70 px-3 py-4 text-sm text-emerald-800">
-              暂无测速数据，请先进行性能评测
+              {rankingSearch ? "未找到匹配的测速数据" : "暂无测速数据，请先进行性能评测"}
             </div>
           )}
         </aside>
@@ -3593,6 +3725,11 @@ export default function Home() {
 
             <div className="mt-3 rounded-2xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
               当前配置：<span className="font-semibold text-zinc-900">{ccSwitchDialogItem.name}</span>
+              {ccSwitchOverrideModel ? (
+                <div className="mt-1 text-xs text-zinc-600">
+                  模型：<span className="font-semibold text-emerald-700">{ccSwitchOverrideModel}</span>
+                </div>
+              ) : null}
             </div>
 
             <label className={labelClass}>目标 App</label>
@@ -4349,6 +4486,40 @@ export default function Home() {
           </div>
         </div>
       ) : null}
+
+      {confirmDialog?.show && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl">
+            <div className="mb-4 flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100">
+                <FaInfoCircle className="h-5 w-5 text-amber-600" aria-hidden />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-zinc-900">{confirmDialog.title}</h3>
+                <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-zinc-600">
+                  {confirmDialog.message}
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setConfirmDialog(null)}
+                className="flex-1 rounded-xl border border-zinc-300 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 focus:outline-none focus:ring-4 focus:ring-zinc-100"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={confirmDialog.onConfirm}
+                className="flex-1 rounded-xl border border-blue-600 bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-100"
+              >
+                确认添加
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div
         className={`pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4 transition-all duration-200 ${
