@@ -3059,24 +3059,39 @@ export default function Home() {
                 {filteredConfigs.length} / {configs.length}
               </span>
             </div>
-            <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_180px]">
+            <div className="grid gap-2">
               <input
                 className={inputClass}
                 value={configSearch}
                 onChange={(e) => setConfigSearch(e.target.value)}
                 placeholder="搜索名称 / 地址 / 模型"
               />
-              <select
-                className={inputClass}
-                value={configStatusFilter}
-                onChange={(e) => setConfigStatusFilter(e.target.value as "all" | TestStatus)}
-              >
-                <option value="all">全部状态</option>
-                <option value="idle">未测试</option>
-                <option value="pending">测试中</option>
-                <option value="success">成功</option>
-                <option value="error">失败</option>
-              </select>
+              <div className="flex flex-wrap items-center gap-2">
+                {[
+                  { value: "all", label: "全部状态" },
+                  { value: "idle", label: "未测试" },
+                  { value: "pending", label: "测试中" },
+                  { value: "success", label: "成功" },
+                  { value: "error", label: "失败" },
+                ].map((option) => {
+                  const active = configStatusFilter === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setConfigStatusFilter(option.value as "all" | TestStatus)}
+                      className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                        active
+                          ? "border-blue-200 bg-blue-50 text-blue-700"
+                          : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-800"
+                      }`}
+                      aria-pressed={active}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
             <div className="flex w-full flex-wrap items-center gap-2 pb-1">
               <button type="button" className={topBtnPrimary} onClick={testAllConfigs} disabled={testingAll}>
