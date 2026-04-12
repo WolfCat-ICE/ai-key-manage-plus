@@ -41,6 +41,7 @@ type KeyConfig = {
   apiKey: string;
   model: string;
   createdAt: string;
+  excludeFromBatchTest?: boolean;
   sourceMeta?: {
     kind: "manual" | "cc-switch-provider" | "cc-switch-deeplink";
     ccSwitchApp?: CcSwitchApp;
@@ -1484,7 +1485,8 @@ function normalizeStoredConfigItem(input: unknown, index: number): KeyConfig | u
   if (!hasCoreValue) return undefined;
 
   const name = rawName || makeDefaultName(index + 1);
-  return { id, name, baseUrl, apiKey, model, createdAt, sourceMeta, probe, lastTest, benchmarks };
+  const excludeFromBatchTest = input.excludeFromBatchTest === true;
+  return { id, name, baseUrl, apiKey, model, createdAt, excludeFromBatchTest, sourceMeta, probe, lastTest, benchmarks };
 }
 
 function toStoredConfigCandidates(parsed: unknown): unknown[] {
@@ -1613,6 +1615,7 @@ export default function Home() {
   const [introExpanded, setIntroExpanded] = useState(false);
   const [favoriteModels, setFavoriteModels] = useState<string[]>([]);
   const [showAddModelDialog, setShowAddModelDialog] = useState(false);
+  const [showBatchExclusionSummary, setShowBatchExclusionSummary] = useState(false);
   const [newModelInput, setNewModelInput] = useState("");
   const [confirmDialog, setConfirmDialog] = useState<{
     show: boolean;
@@ -1665,6 +1668,8 @@ export default function Home() {
   }, [notice]);
 
   const nextIndex = useMemo(() => configs.length + 1, [configs.length]);
+  const excludedConfigs = useMemo(() => configs.filter((item) => item.excludeFromBatchTest), [configs]);
+  const batchTestableConfigs = useMemo(() => configs.filter((item) => !item.excludeFromBatchTest), [configs]);
   const filteredConfigs = useMemo(() => {
     const query = configSearch.trim().toLowerCase();
 
@@ -1679,6 +1684,22 @@ export default function Home() {
       return matchesSearch && matchesStatus;
     });
   }, [configSearch, configStatusFilter, configs, resultMap]);
+  const configStatusCounts = useMemo(() => {
+    const counts: Record<"all" | TestStatus, number> = {
+      all: configs.length,
+      idle: 0,
+      pending: 0,
+      success: 0,
+      error: 0
+    };
+
+    for (const item of configs) {
+      const status = (resultMap[item.id] || item.lastTest || defaultTestResult()).status;
+      counts[status] += 1;
+    }
+
+    return counts;
+  }, [configs, resultMap]);
   const ccSwitchDialogItem = useMemo(
     () => configs.find((item) => item.id === ccSwitchDialogId) || null,
     [configs, ccSwitchDialogId]
@@ -2464,6 +2485,33 @@ export default function Home() {
     setNotice(ok ? `${item.name} 测试通过` : `${item.name} 测试失败`);
   }
 
+  function toggleExcludeFromBatchTest(id: string) {
+    const target = configs.find((item) => item.id === id);
+    if (!target) return;
+
+    const nextExcluded = !target.excludeFromBatchTest;
+    setConfigs((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, excludeFromBatchTest: nextExcluded } : item))
+    );
+    setNotice(nextExcluded ? `已将 ${target.name} 排除出一键测试` : `已恢复 ${target.name} 参与一键测试`);
+  }
+
+  function includeInBatchTest(id: string) {
+    const target = configs.find((item) => item.id === id);
+    if (!target?.excludeFromBatchTest) return;
+
+    setConfigs((prev) => prev.map((item) => (item.id === id ? { ...item, excludeFromBatchTest: false } : item)));
+    setNotice(`已恢复 ${target.name} 参与一键测试`);
+  }
+
+  function clearBatchTestExclusions() {
+    if (excludedConfigs.length === 0) return;
+
+    setConfigs((prev) => prev.map((item) => (item.excludeFromBatchTest ? { ...item, excludeFromBatchTest: false } : item)));
+    setShowBatchExclusionSummary(false);
+    setNotice("已清空排除清单");
+  }
+
   async function runModelProbe(item: KeyConfig): Promise<boolean> {
     setProbeMap((prev) => ({
       ...prev,
@@ -2756,13 +2804,20 @@ export default function Home() {
       return;
     }
 
+    if (batchTestableConfigs.length === 0) {
+      setNotice("没有可参与一键测试的配置");
+      return;
+    }
+
     setTestingAll(true);
-    setNotice("开始测试全部配置...");
-    const result = await Promise.all(configs.map((item) => runTest(item)));
+    setNotice(
+      `开始测试 ${batchTestableConfigs.length} 个配置${excludedConfigs.length > 0 ? `（已排除 ${excludedConfigs.length} 个）` : ""}...`
+    );
+    const result = await Promise.all(batchTestableConfigs.map((item) => runTest(item)));
     const passCount = result.filter(Boolean).length;
     const failCount = result.length - passCount;
     setTestingAll(false);
-    setNotice(`测试完成：通过 ${passCount}，失败 ${failCount}`);
+    setNotice(`测试完成：通过 ${passCount}，失败 ${failCount}${excludedConfigs.length > 0 ? `，排除 ${excludedConfigs.length}` : ""}`);
   }
 
   async function copyText(text: string, okText: string) {
@@ -3334,7 +3389,7 @@ export default function Home() {
                       }`}
                       aria-pressed={active}
                     >
-                      {option.label}
+                      {option.label} {configStatusCounts[option.value as "all" | TestStatus]}
                     </button>
                   );
                 })}
@@ -3345,6 +3400,48 @@ export default function Home() {
                 {testingAll ? <FaSpinner className="animate-spin" aria-hidden /> : <FaBolt aria-hidden />}
                 <span>{testingAll ? "测试中" : "一键测试全部"}</span>
               </button>
+              {excludedConfigs.length > 0 ? (
+                <div className="relative">
+                  <button
+                    type="button"
+                    className={topBtnGhost}
+                    onClick={() => setShowBatchExclusionSummary((prev) => !prev)}
+                    aria-expanded={showBatchExclusionSummary}
+                  >
+                    <FaTag aria-hidden />
+                    <span>已排除 {excludedConfigs.length} 项</span>
+                    {showBatchExclusionSummary ? <FaChevronUp aria-hidden /> : <FaChevronDown aria-hidden />}
+                  </button>
+                  {showBatchExclusionSummary ? (
+                    <div className="absolute left-0 top-full z-20 mt-2 w-72 rounded-2xl border border-zinc-200 bg-white p-3 shadow-xl">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-zinc-900">一键测试排除清单</p>
+                        <button
+                          type="button"
+                          className="text-xs font-medium text-emerald-700 hover:text-emerald-800"
+                          onClick={clearBatchTestExclusions}
+                        >
+                          清空
+                        </button>
+                      </div>
+                      <div className="mt-2 grid gap-2">
+                        {excludedConfigs.map((excluded) => (
+                          <div key={excluded.id} className="flex items-center justify-between gap-2 rounded-xl border border-zinc-200 bg-zinc-50 px-2.5 py-2">
+                            <span className="min-w-0 flex-1 truncate text-sm text-zinc-700">{excluded.name}</span>
+                            <button
+                              type="button"
+                              className="text-xs font-medium text-emerald-700 hover:text-emerald-800"
+                              onClick={() => includeInBatchTest(excluded.id)}
+                            >
+                              恢复参与
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <button type="button" className={topBtnGhost} onClick={probeAllConfigs} disabled={probingAll}>
                 {probingAll ? <FaSpinner className="animate-spin" aria-hidden /> : <FaMagic aria-hidden />}
                 <span>{probingAll ? "识别中" : "识别全部模型"}</span>
@@ -3399,6 +3496,7 @@ export default function Home() {
                 const fastestBenchmark = pickFastestBenchmark(finishedBenchmarks);
                 const quickestFirstTokenBenchmark = pickQuickestFirstTokenBenchmark(finishedBenchmarks);
                 const recommendedBenchmark = pickRecommendedBenchmark(finishedBenchmarks);
+                const excludedFromBatchTest = item.excludeFromBatchTest === true;
 
                 return (
                   <li key={item.id} className="rounded-2xl border border-zinc-200 bg-white p-2.5">
@@ -3452,6 +3550,11 @@ export default function Home() {
                           <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-[11px] font-medium text-zinc-600">
                             {getSourceBadge(item.sourceMeta)}
                           </span>
+                          {excludedFromBatchTest ? (
+                            <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700">
+                              已排除一键测试
+                            </span>
+                          ) : null}
                         </div>
 
                         <div className="mt-2 grid gap-2">
@@ -3708,6 +3811,16 @@ export default function Home() {
                             >
                               {testing ? <FaSpinner className="animate-spin" aria-hidden /> : <FaBolt aria-hidden />}
                               <span>测试</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={excludedFromBatchTest ? smallBtn : `${smallBtn} border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:bg-amber-100`}
+                              onClick={() => toggleExcludeFromBatchTest(item.id)}
+                              title={excludedFromBatchTest ? "恢复参与一键测试" : "排除出一键测试"}
+                              aria-label={excludedFromBatchTest ? "恢复参与一键测试" : "排除出一键测试"}
+                            >
+                              <FaTag aria-hidden />
+                              <span>{excludedFromBatchTest ? "恢复批量测试" : "排除一键测试"}</span>
                             </button>
                             <button
                               type="button"
