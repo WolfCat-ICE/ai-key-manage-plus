@@ -170,6 +170,7 @@ type CcSwitchAction = {
 const STORAGE_KEY = "ai-key-vault-configs-v1";
 const LEGACY_STORAGE_KEYS = ["ai-key-vault-configs", "ai-key-check-configs-v1"];
 const INTRO_SEEN_KEY = "ai-key-vault-intro-seen-v1";
+const FAVORITE_MODELS_KEY = "ai-key-vault-favorite-models-v1";
 const SOURCE_REPO_URL = "https://github.com/Yoan98/ai-key-manage";
 const PASS_TEXT = "主人，快鞭策我吧";
 const FAIL_TEXT = "主人，我不行了";
@@ -1060,6 +1061,16 @@ function normalizeStoredBenchmarks(input: unknown): KeyConfig["benchmarks"] | un
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+function normalizeModelName(model: string): string {
+  return model.trim().toLowerCase().replace(/[\s\-_.]/g, "");
+}
+
+function fuzzyMatchModel(favoriteModel: string, supportedModel: string): boolean {
+  const normalizedFavorite = normalizeModelName(favoriteModel);
+  const normalizedSupported = normalizeModelName(supportedModel);
+  return normalizedSupported.includes(normalizedFavorite);
+}
+
 function isLikelyChatBenchmarkable(model: string, tags?: string[]): boolean {
   const normalized = model.trim().toLowerCase();
   const resolvedTags = tags || inferModelTags(model);
@@ -1599,6 +1610,9 @@ export default function Home() {
   const [benchmarkListCollapsed, setBenchmarkListCollapsed] = useState(false);
   const [benchmarkDetailModel, setBenchmarkDetailModel] = useState("");
   const [introExpanded, setIntroExpanded] = useState(false);
+  const [favoriteModels, setFavoriteModels] = useState<string[]>([]);
+  const [showAddModelDialog, setShowAddModelDialog] = useState(false);
+  const [newModelInput, setNewModelInput] = useState("");
   const [confirmDialog, setConfirmDialog] = useState<{
     show: boolean;
     title: string;
@@ -1627,6 +1641,21 @@ export default function Home() {
       localStorage.setItem(INTRO_SEEN_KEY, "1");
     }
   }, []);
+
+  useEffect(() => {
+    const stored = localStorage.getItem(FAVORITE_MODELS_KEY);
+    if (stored) {
+      try {
+        setFavoriteModels(JSON.parse(stored));
+      } catch {
+        setFavoriteModels([]);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(FAVORITE_MODELS_KEY, JSON.stringify(favoriteModels));
+  }, [favoriteModels]);
 
   useEffect(() => {
     if (!notice) return;
@@ -2820,11 +2849,23 @@ export default function Home() {
     setBenchmarkSearch("");
     setBenchmarkRoundsInput(String(DEFAULT_BENCHMARK_ROUNDS));
     const currentModel = item.model.trim();
+    const autoSelected = new Set<string>();
     if (currentModel && activeProbe.supportedModels.includes(currentModel) && isLikelyChatBenchmarkable(currentModel)) {
-      setSelectedProbeModels([currentModel]);
-    } else {
-      setSelectedProbeModels([]);
+      autoSelected.add(currentModel);
     }
+    if (favoriteModels.length > 0) {
+      for (const supported of activeProbe.supportedModels) {
+        if (!isLikelyChatBenchmarkable(supported)) continue;
+        if (autoSelected.has(supported)) continue;
+        for (const fav of favoriteModels) {
+          if (fuzzyMatchModel(fav, supported)) {
+            autoSelected.add(supported);
+            break;
+          }
+        }
+      }
+    }
+    setSelectedProbeModels([...autoSelected]);
 
     setProbeDialogId(null);
     setBenchmarkChartModel(item.model.trim());
@@ -3011,9 +3052,40 @@ export default function Home() {
     setModelDraft("");
   }
 
+  function addFavoriteModel(model: string) {
+    const trimmed = model.trim();
+    if (!trimmed) {
+      setNotice("模型名称不能为空");
+      return;
+    }
+    if (favoriteModels.includes(trimmed)) {
+      setNotice("该模型已存在");
+      return;
+    }
+    setFavoriteModels((prev) => [...prev, trimmed]);
+    setNotice(`已添加常用模型：${trimmed}`);
+    setShowAddModelDialog(false);
+    setNewModelInput("");
+  }
+
+  function handleAddModelSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    addFavoriteModel(newModelInput);
+  }
+
+  function removeFavoriteModel(model: string) {
+    setFavoriteModels((prev) => prev.filter((m) => m !== model));
+    setNotice(`已移除常用模型：${model}`);
+  }
+
+  function applyFavoriteModel(model: string) {
+    setForm((prev) => ({ ...prev, model }));
+    setNotice(`已应用模型：${model}`);
+  }
+
   return (
     <main className="mx-auto w-full max-w-[1600px] space-y-3 px-3 py-4 text-zinc-900 sm:px-4">
-      <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+      <header className="grid gap-3 xl:grid-cols-[minmax(16rem,0.6fr)_minmax(0,1.35fr)_380px]">
         <div>
           <h1 className="flex items-center gap-2.5 text-2xl font-bold tracking-tight text-zinc-900 sm:text-3xl">
             <Image
@@ -3028,11 +3100,51 @@ export default function Home() {
           </h1>
           <p className="mt-1 text-sm text-zinc-500">本地保存、批量测试、模型识别、性能评测、复制与导出</p>
         </div>
+
+        <div className="rounded-2xl border border-zinc-200 bg-white p-3.5 shadow-sm sm:p-4">
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-zinc-700">常用模型</h3>
+            <button
+              type="button"
+              className="text-xs text-emerald-600 hover:text-emerald-700 font-medium"
+              onClick={() => setShowAddModelDialog(true)}
+            >
+              + 添加
+            </button>
+          </div>
+          {favoriteModels.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {favoriteModels.map((model) => (
+                <button
+                  key={model}
+                  type="button"
+                  className="group inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs text-zinc-700 transition hover:border-emerald-300 hover:bg-emerald-50"
+                  onClick={() => applyFavoriteModel(model)}
+                >
+                  <span>{model}</span>
+                  <button
+                    type="button"
+                    className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-600 transition"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeFavoriteModel(model);
+                    }}
+                  >
+                    ×
+                  </button>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-400">暂无常用模型，点击右上角添加</p>
+          )}
+        </div>
+
         <a
           href={SOURCE_REPO_URL}
           target="_blank"
           rel="noreferrer"
-          className="group flex items-center justify-between gap-3 rounded-2xl border border-zinc-200 bg-white px-4 py-3 shadow-sm transition hover:border-zinc-300 hover:bg-zinc-50 focus:outline-none focus:ring-4 focus:ring-emerald-100 sm:min-w-72"
+          className="group flex items-center justify-between gap-3 rounded-2xl border border-zinc-200 bg-white px-4 py-3 shadow-sm transition hover:border-zinc-300 hover:bg-zinc-50 focus:outline-none focus:ring-4 focus:ring-emerald-100"
           aria-label="打开项目源码 GitHub 仓库"
         >
           <div className="flex items-center gap-3">
@@ -3121,6 +3233,59 @@ export default function Home() {
               onChange={(e) => setForm((prev) => ({ ...prev, model: e.target.value }))}
               placeholder="例如：gpt-4.1-mini"
             />
+
+            {favoriteModels.length > 0 && (
+              <div className="mt-2">
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="text-xs font-medium text-zinc-600">常用模型</span>
+                  <button
+                    type="button"
+                    className="text-xs text-emerald-600 hover:text-emerald-700"
+                    onClick={() => {
+                      const newModel = prompt("输入模型名称：");
+                      if (newModel) addFavoriteModel(newModel);
+                    }}
+                  >
+                    + 添加
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {favoriteModels.map((model) => (
+                    <button
+                      key={model}
+                      type="button"
+                      className="group inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs text-zinc-700 transition hover:border-emerald-300 hover:bg-emerald-50"
+                      onClick={() => applyFavoriteModel(model)}
+                    >
+                      <span>{model}</span>
+                      <button
+                        type="button"
+                        className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-600"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeFavoriteModel(model);
+                        }}
+                      >
+                        ×
+                      </button>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {favoriteModels.length === 0 && (
+              <button
+                type="button"
+                className="mt-2 text-xs text-zinc-500 hover:text-emerald-600"
+                onClick={() => {
+                  const newModel = prompt("输入模型名称：");
+                  if (newModel) addFavoriteModel(newModel);
+                }}
+              >
+                + 添加常用模型
+              </button>
+            )}
 
             <div className="mt-2 flex flex-wrap gap-2">
               <button type="submit" className={btnPrimary}>
@@ -3615,7 +3780,7 @@ export default function Home() {
           )}
         </section>
 
-        <aside className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3 shadow-sm xl:sticky xl:top-4">
+        <aside className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3 shadow-sm">
           <div>
             <p className="text-sm font-semibold text-emerald-900">成功测速排行榜</p>
             <p className="mt-1 text-xs text-emerald-700">按中位耗时从快到慢排序，仅展示测试成功的模型</p>
@@ -4486,6 +4651,45 @@ export default function Home() {
           </div>
         </div>
       ) : null}
+
+      {showAddModelDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl">
+            <div className="mb-4">
+              <h3 className="text-lg font-semibold text-zinc-900">添加常用模型</h3>
+              <p className="mt-1 text-sm text-zinc-500">输入模型名称，例如：gpt-4o、claude-3-5-sonnet-20241022</p>
+            </div>
+            <form onSubmit={handleAddModelSubmit}>
+              <input
+                type="text"
+                className={inputClass}
+                value={newModelInput}
+                onChange={(e) => setNewModelInput(e.target.value)}
+                placeholder="例如：gpt-4o"
+                autoFocus
+              />
+              <div className="mt-4 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAddModelDialog(false);
+                    setNewModelInput("");
+                  }}
+                  className="flex-1 rounded-xl border border-zinc-300 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 focus:outline-none focus:ring-4 focus:ring-zinc-100"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 rounded-xl border border-emerald-600 bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-700 focus:outline-none focus:ring-4 focus:ring-emerald-100"
+                >
+                  添加
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {confirmDialog?.show && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 backdrop-blur-sm">
