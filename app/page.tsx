@@ -318,11 +318,14 @@ const STRUCTURED_FIELD_RULES: StructuredFieldRule[] = [
 ];
 
 const STRUCTURED_FIELD_SEPARATOR_PATTERN = "(?::|：|=|＝|=>|->)";
-const ANY_STRUCTURED_LABEL_PATTERN = STRUCTURED_FIELD_RULES.map((rule) => rule.labelPattern).join("|");
+const STRUCTURED_FIELD_BREAK_LABEL_PATTERN = [
+  ...STRUCTURED_FIELD_RULES.map((rule) => rule.labelPattern),
+  "(?:created\s*at|created_at|创建时间|更新时间|updated\s*at|updated_at)"
+].join("|");
 const DECORATIVE_LINE_RE = /^\s*(?:=+|-{3,}|_{3,}|~{3,})\s*$/;
 const INDEX_ONLY_LINE_RE = /^\s*(?:\[\s*\d+\s*\]|\(\s*\d+\s*\)|（\s*\d+\s*）|#\s*\d+|(?:item|配置)\s*\d+|\d+[.)、])\s*$/i;
 const INLINE_FIELD_BREAK_RE = new RegExp(
-  `([^\\n])\\s+(?=(?:${ANY_STRUCTURED_LABEL_PATTERN})\\s*(?:${STRUCTURED_FIELD_SEPARATOR_PATTERN}))`,
+  `([^\\n])\\s+(?=(?:${STRUCTURED_FIELD_BREAK_LABEL_PATTERN})\\s*(?:${STRUCTURED_FIELD_SEPARATOR_PATTERN}))`,
   "gi"
 );
 
@@ -398,11 +401,33 @@ function parseStructuredSegment(input: string): Partial<ParsedConfig> {
   return out;
 }
 
+function extractInlineStructuredValue(input: string, labelPattern: string): string {
+  const match = input.match(
+    new RegExp(
+      `(?:^|[\\n\\r]|\\s)(?:${labelPattern})\\s*(?:${STRUCTURED_FIELD_SEPARATOR_PATTERN})\\s*(.+?)(?=(?:\\s+(?:${STRUCTURED_FIELD_BREAK_LABEL_PATTERN})\\s*(?:${STRUCTURED_FIELD_SEPARATOR_PATTERN}))|$)`,
+      "i"
+    )
+  );
+
+  return match?.[1] || "";
+}
+
 function parseSingleSegment(input: string): Partial<ParsedConfig> {
   const text = input.trim();
   if (!text) return {};
 
   const out: Partial<ParsedConfig> = parseStructuredSegment(text);
+
+  for (const rule of STRUCTURED_FIELD_RULES) {
+    if (out[rule.field]) continue;
+    const inlineValue = extractInlineStructuredValue(text, rule.labelPattern);
+    if (!inlineValue) continue;
+    out[rule.field] = rule.normalize(inlineValue) as never;
+  }
+
+  if (hasAnyParsedField(out)) {
+    return out;
+  }
 
   const keyPatterns = [
     /api[_-]?key["'\s:：=＝]+([A-Za-z0-9._-]{10,})/i,
@@ -3171,24 +3196,23 @@ export default function Home() {
           {favoriteModels.length > 0 ? (
             <div className="flex flex-wrap gap-1.5">
               {favoriteModels.map((model) => (
-                <button
-                  key={model}
-                  type="button"
-                  className="group inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs text-zinc-700 transition hover:border-emerald-300 hover:bg-emerald-50"
-                  onClick={() => applyFavoriteModel(model)}
-                >
-                  <span>{model}</span>
+                <div key={model} className="group inline-flex items-center gap-1">
                   <button
                     type="button"
-                    className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-600 transition"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      removeFavoriteModel(model);
-                    }}
+                    className="inline-flex items-center rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs text-zinc-700 transition hover:border-emerald-300 hover:bg-emerald-50"
+                    onClick={() => applyFavoriteModel(model)}
+                  >
+                    <span>{model}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="inline-flex h-6 w-6 items-center justify-center rounded-md text-zinc-400 opacity-0 transition group-hover:opacity-100 hover:bg-zinc-100 hover:text-red-600"
+                    onClick={() => removeFavoriteModel(model)}
+                    aria-label={`移除常用模型 ${model}`}
                   >
                     ×
                   </button>
-                </button>
+                </div>
               ))}
             </div>
           ) : (
@@ -3307,24 +3331,23 @@ export default function Home() {
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {favoriteModels.map((model) => (
-                    <button
-                      key={model}
-                      type="button"
-                      className="group inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs text-zinc-700 transition hover:border-emerald-300 hover:bg-emerald-50"
-                      onClick={() => applyFavoriteModel(model)}
-                    >
-                      <span>{model}</span>
+                    <div key={model} className="group inline-flex items-center gap-1">
                       <button
                         type="button"
-                        className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-600"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          removeFavoriteModel(model);
-                        }}
+                        className="inline-flex items-center rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs text-zinc-700 transition hover:border-emerald-300 hover:bg-emerald-50"
+                        onClick={() => applyFavoriteModel(model)}
+                      >
+                        <span>{model}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex h-6 w-6 items-center justify-center rounded-md text-zinc-400 opacity-0 transition group-hover:opacity-100 hover:bg-zinc-100 hover:text-red-600"
+                        onClick={() => removeFavoriteModel(model)}
+                        aria-label={`移除常用模型 ${model}`}
                       >
                         ×
                       </button>
-                    </button>
+                    </div>
                   ))}
                 </div>
               </div>
