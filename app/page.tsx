@@ -1603,6 +1603,7 @@ export default function Home() {
   const [rankingSearch, setRankingSearch] = useState("");
   const [benchmarkSearch, setBenchmarkSearch] = useState("");
   const [benchmarkRoundsInput, setBenchmarkRoundsInput] = useState(String(DEFAULT_BENCHMARK_ROUNDS));
+  const configListRef = useRef<HTMLElement | null>(null);
   const [selectedProbeModels, setSelectedProbeModels] = useState<string[]>([]);
   const [benchmarkBatch, setBenchmarkBatch] = useState<BenchmarkBatchProgress | null>(null);
   const [benchmarkSummaryMap, setBenchmarkSummaryMap] = useState<Record<string, BenchmarkSummary>>({});
@@ -1991,14 +1992,14 @@ export default function Home() {
     };
   }, [activeBenchmarkChartResult]);
   const configBenchmarkRanking = useMemo(() => {
-    const benchmarkEntries = filteredConfigs.flatMap((item) => {
+    const benchmarkEntries = configs.flatMap((item) => {
       const runtimeBenchmarks = benchmarkMap[item.id] || {};
       return collectFinishedBenchmarks(item, runtimeBenchmarks)
         .map((benchmark) => buildBenchmarkRankingEntry(item.id, item.name || item.model || "未命名配置", benchmark))
         .filter((entry): entry is BenchmarkRankingEntry => Boolean(entry));
     });
 
-    const testEntries = filteredConfigs
+    const testEntries = configs
       .map((item) => {
         const testResult = resultMap[item.id] || item.lastTest;
         if (!testResult) return null;
@@ -2021,7 +2022,7 @@ export default function Home() {
       : filteredByType;
 
     return sortBenchmarkRankingEntries(filteredBySearch);
-  }, [benchmarkMap, filteredConfigs, resultMap, rankingFilter, rankingSearch]);
+  }, [benchmarkMap, configs, resultMap, rankingFilter, rankingSearch]);
 
   useEffect(() => {
     if (!benchmarkDialogItem) return;
@@ -3296,7 +3297,7 @@ export default function Home() {
           </form>
         </section>
 
-        <section className="rounded-2xl border border-zinc-200 bg-white p-3.5 shadow-sm sm:p-4">
+        <section ref={configListRef} className="rounded-2xl border border-zinc-200 bg-white p-3.5 shadow-sm sm:p-4">
           <div className="mb-3 space-y-2">
             <div className="flex items-center gap-1.5">
               <h2 className="text-base font-semibold whitespace-nowrap text-zinc-900">配置列表</h2>
@@ -3828,7 +3829,13 @@ export default function Home() {
                 return (
                   <div
                     key={`${entry.configName}-${entry.model}-${entry.testedAt}`}
-                    className="flex items-start gap-3 rounded-xl border border-white/80 bg-white/90 p-3 shadow-sm"
+                    className="flex items-start gap-3 rounded-xl border border-white/80 bg-white/90 p-3 shadow-sm cursor-pointer select-none"
+                    title="双击筛选该配置"
+                    onDoubleClick={() => {
+                      setConfigSearch(entry.configName);
+                      setConfigStatusFilter("all");
+                      configListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+                    }}
                   >
                     <div className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-sm font-semibold text-white">
                       {index + 1}
