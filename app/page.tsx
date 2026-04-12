@@ -211,8 +211,38 @@ const smallDangerBtn =
   "inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 transition hover:border-red-700 hover:bg-red-700 hover:text-white";
 const iconCopyBtn =
   "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 disabled:cursor-not-allowed disabled:opacity-45";
+const floatingClearBtn =
+  "absolute right-3 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 focus:outline-none focus:ring-2 focus:ring-emerald-100";
 const endpointHintText = "地址只填域名也可以，系统会自动兼容 /v1、/chat/completions、/responses；测试会兼容流式、普通响应和 Responses，并优先展示信息量更高的那份回复。";
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
+
+function ClearableField({
+  value,
+  onClear,
+  children,
+  isTextarea = false
+}: {
+  value: string;
+  onClear: () => void;
+  children: React.ReactNode;
+  isTextarea?: boolean;
+}) {
+  return (
+    <div className="relative">
+      {children}
+      {value ? (
+        <button
+          type="button"
+          className={`${floatingClearBtn} ${isTextarea ? "top-3 translate-y-0" : ""}`}
+          onClick={onClear}
+          aria-label="清空当前输入框"
+        >
+          <FaTimesCircle aria-hidden className="h-4 w-4" />
+        </button>
+      ) : null}
+    </div>
+  );
+}
 
 function normalizeBaseUrl(raw: string): string {
   const cleaned = raw.trim().replace(/\/+$/, "");
@@ -3251,13 +3281,15 @@ export default function Home() {
           </div>
 
           <label className={labelClass}>粘贴内容（支持一次解析多个配置）</label>
-          <textarea
-            className={inputClass}
-            value={pasteRaw}
-            onChange={(e) => setPasteRaw(e.target.value)}
-            placeholder="可粘贴 curl、JSON、环境变量、ccswitch:// 链接、多个配置块"
-            rows={3}
-          />
+          <ClearableField value={pasteRaw} onClear={() => setPasteRaw("")} isTextarea>
+            <textarea
+              className={`${inputClass} pr-10`}
+              value={pasteRaw}
+              onChange={(e) => setPasteRaw(e.target.value)}
+              placeholder="可粘贴 curl、JSON、环境变量、ccswitch:// 链接、多个配置块"
+              rows={3}
+            />
+          </ClearableField>
 
           <div className="mt-2 flex flex-wrap gap-2">
             <button type="button" className={btnGhost} onClick={applyPaste}>
@@ -3272,47 +3304,55 @@ export default function Home() {
 
           <form onSubmit={addConfig} className="mt-2">
             <label className={labelClass}>名称</label>
-            <input
-              className={inputClass}
-              value={form.name}
-              onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
-              placeholder={`例如：${makeDefaultName(nextIndex)}`}
-            />
+            <ClearableField value={form.name} onClear={() => setForm((prev) => ({ ...prev, name: "" }))}>
+              <input
+                className={`${inputClass} pr-10`}
+                value={form.name}
+                onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
+                placeholder={`例如：${makeDefaultName(nextIndex)}`}
+              />
+            </ClearableField>
 
             <label className={labelClass}>地址</label>
-            <input
-              className={inputClass}
-              value={form.baseUrl}
-              onChange={(e) => {
-                const newBaseUrl = e.target.value;
-                setForm((prev) => {
-                  const autoName = !prev.name.trim() && newBaseUrl.trim()
-                    ? newBaseUrl.trim().replace(/^https?:\/\//, "")
-                    : prev.name;
-                  return { ...prev, baseUrl: newBaseUrl, name: autoName };
-                });
-              }}
-              placeholder="例如：https://api.openai.com"
-              required
-            />
+            <ClearableField value={form.baseUrl} onClear={() => setForm((prev) => ({ ...prev, baseUrl: "" }))}>
+              <input
+                className={`${inputClass} pr-10`}
+                value={form.baseUrl}
+                onChange={(e) => {
+                  const newBaseUrl = e.target.value;
+                  setForm((prev) => {
+                    const autoName = !prev.name.trim() && newBaseUrl.trim()
+                      ? newBaseUrl.trim().replace(/^https?:\/\//, "")
+                      : prev.name;
+                    return { ...prev, baseUrl: newBaseUrl, name: autoName };
+                  });
+                }}
+                placeholder="例如：https://api.openai.com"
+                required
+              />
+            </ClearableField>
             <p className="mt-1 text-[11px] leading-5 text-zinc-500">{endpointHintText}</p>
 
             <label className={labelClass}>Key</label>
-            <input
-              className={inputClass}
-              value={form.apiKey}
-              onChange={(e) => setForm((prev) => ({ ...prev, apiKey: e.target.value }))}
-              placeholder="例如：sk-xxxx"
-              required
-            />
+            <ClearableField value={form.apiKey} onClear={() => setForm((prev) => ({ ...prev, apiKey: "" }))}>
+              <input
+                className={`${inputClass} pr-10`}
+                value={form.apiKey}
+                onChange={(e) => setForm((prev) => ({ ...prev, apiKey: e.target.value }))}
+                placeholder="例如：sk-xxxx"
+                required
+              />
+            </ClearableField>
 
             <label className={labelClass}>模型（可选）</label>
-            <input
-              className={inputClass}
-              value={form.model}
-              onChange={(e) => setForm((prev) => ({ ...prev, model: e.target.value }))}
-              placeholder="例如：gpt-4.1-mini"
-            />
+            <ClearableField value={form.model} onClear={() => setForm((prev) => ({ ...prev, model: "" }))}>
+              <input
+                className={`${inputClass} pr-10`}
+                value={form.model}
+                onChange={(e) => setForm((prev) => ({ ...prev, model: e.target.value }))}
+                placeholder="例如：gpt-4.1-mini"
+              />
+            </ClearableField>
 
             {favoriteModels.length > 0 && (
               <div className="mt-2">
@@ -3385,12 +3425,14 @@ export default function Home() {
               </span>
             </div>
             <div className="grid gap-2">
-              <input
-                className={inputClass}
-                value={configSearch}
-                onChange={(e) => setConfigSearch(e.target.value)}
-                placeholder="搜索名称 / 地址 / 模型"
-              />
+              <ClearableField value={configSearch} onClear={() => setConfigSearch("")}>
+                <input
+                  className={`${inputClass} pr-10`}
+                  value={configSearch}
+                  onChange={(e) => setConfigSearch(e.target.value)}
+                  placeholder="搜索名称 / 地址 / 模型"
+                />
+              </ClearableField>
               <div className="flex flex-wrap items-center gap-2">
                 {[
                   { value: "all", label: "全部状态" },
@@ -3949,13 +3991,15 @@ export default function Home() {
           </div>
 
           <div className="mt-3">
-            <input
-              type="text"
-              placeholder="搜索模型或配置名称..."
-              value={rankingSearch}
-              onChange={(e) => setRankingSearch(e.target.value)}
-              className={inputClass}
-            />
+            <ClearableField value={rankingSearch} onClear={() => setRankingSearch("")}>
+              <input
+                type="text"
+                placeholder="搜索模型或配置名称..."
+                value={rankingSearch}
+                onChange={(e) => setRankingSearch(e.target.value)}
+                className={`${inputClass} pr-10`}
+              />
+            </ClearableField>
           </div>
 
           {configBenchmarkRanking.length > 0 ? (
@@ -4269,12 +4313,14 @@ export default function Home() {
                 <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto] lg:items-end">
                   <label className="block">
                     <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">搜索模型</span>
-                    <input
-                      className={inputClass}
-                      value={benchmarkSearch}
-                      onChange={(e) => setBenchmarkSearch(e.target.value)}
-                      placeholder="输入模型名或 tag，例如 gpt / thinking / embedding"
-                    />
+                    <ClearableField value={benchmarkSearch} onClear={() => setBenchmarkSearch("")}>
+                      <input
+                        className={`${inputClass} pr-10`}
+                        value={benchmarkSearch}
+                        onChange={(e) => setBenchmarkSearch(e.target.value)}
+                        placeholder="输入模型名或 tag，例如 gpt / thinking / embedding"
+                      />
+                    </ClearableField>
                   </label>
 
                   <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2.5">
