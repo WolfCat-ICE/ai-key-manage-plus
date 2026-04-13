@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(npm run:*)",
-      "Bash(cmd.exe:*)"
+      "Bash(cmd.exe:*)",
+      "Bash(git -C \"e:/MyProject/idea-ai-code/ai-key-manage-main\" log --oneline -5)",
+      "Bash(npm --prefix \"e:/MyProject/idea-ai-code/ai-key-manage-main\" run build)",
+      "Bash(npm --prefix \"e:/MyProject/idea-ai-code/ai-key-manage-main\" run lint)"
     ]
   }
 }

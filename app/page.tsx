@@ -211,6 +211,10 @@ const smallDangerBtn =
   "inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 transition hover:border-red-700 hover:bg-red-700 hover:text-white";
 const iconCopyBtn =
   "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 disabled:cursor-not-allowed disabled:opacity-45";
+const favoriteModelChipBtn =
+  "inline-flex items-center rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs text-zinc-700 transition hover:border-emerald-300 hover:bg-emerald-50";
+const favoriteModelDeleteBtn =
+  "absolute -right-1 -top-1 inline-flex h-4.5 w-4.5 items-center justify-center rounded-full border border-white bg-zinc-200 text-[10px] font-semibold leading-none text-zinc-600 opacity-0 shadow-sm transition group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-red-500 hover:text-white focus:outline-none focus:ring-2 focus:ring-emerald-100 focus:opacity-100";
 const floatingClearBtn =
   "absolute right-3 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 focus:outline-none focus:ring-2 focus:ring-emerald-100";
 const endpointHintText = "地址只填域名也可以，系统会自动兼容 /v1、/chat/completions、/responses；测试会兼容流式、普通响应和 Responses，并优先展示信息量更高的那份回复。";
@@ -3213,41 +3217,41 @@ export default function Home() {
         </div>
 
         <div className="rounded-2xl border border-zinc-200 bg-white p-3.5 shadow-sm sm:p-4">
-          <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-zinc-700">常用模型</h3>
+          <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-2 gap-y-1.5">
+            <h3 className="flex h-7 items-center text-sm font-semibold text-zinc-700">常用模型</h3>
+            {favoriteModels.length > 0 ? (
+              <div className="flex min-w-0 flex-wrap gap-1.5">
+                {favoriteModels.map((model) => (
+                  <div key={model} className="group relative inline-flex">
+                    <button
+                      type="button"
+                      className={favoriteModelChipBtn}
+                      onClick={() => applyFavoriteModel(model)}
+                    >
+                      <span>{model}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={favoriteModelDeleteBtn}
+                      onClick={() => removeFavoriteModel(model)}
+                      aria-label={`移除常用模型 ${model}`}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="flex h-7 items-center text-xs text-zinc-400">暂无常用模型</p>
+            )}
             <button
               type="button"
-              className="text-xs text-emerald-600 hover:text-emerald-700 font-medium"
+              className="inline-flex h-7 items-center justify-self-end text-xs font-medium text-emerald-600 hover:text-emerald-700"
               onClick={() => setShowAddModelDialog(true)}
             >
               + 添加
             </button>
           </div>
-          {favoriteModels.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5">
-              {favoriteModels.map((model) => (
-                <div key={model} className="group inline-flex items-center gap-1">
-                  <button
-                    type="button"
-                    className="inline-flex items-center rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs text-zinc-700 transition hover:border-emerald-300 hover:bg-emerald-50"
-                    onClick={() => applyFavoriteModel(model)}
-                  >
-                    <span>{model}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="inline-flex h-6 w-6 items-center justify-center rounded-md text-zinc-400 opacity-0 transition group-hover:opacity-100 hover:bg-zinc-100 hover:text-red-600"
-                    onClick={() => removeFavoriteModel(model)}
-                    aria-label={`移除常用模型 ${model}`}
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-xs text-zinc-400">暂无常用模型，点击右上角添加</p>
-          )}
         </div>
 
         <a
@@ -3371,17 +3375,17 @@ export default function Home() {
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {favoriteModels.map((model) => (
-                    <div key={model} className="group inline-flex items-center gap-1">
+                    <div key={model} className="group relative inline-flex">
                       <button
                         type="button"
-                        className="inline-flex items-center rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs text-zinc-700 transition hover:border-emerald-300 hover:bg-emerald-50"
+                        className={favoriteModelChipBtn}
                         onClick={() => applyFavoriteModel(model)}
                       >
                         <span>{model}</span>
                       </button>
                       <button
                         type="button"
-                        className="inline-flex h-6 w-6 items-center justify-center rounded-md text-zinc-400 opacity-0 transition group-hover:opacity-100 hover:bg-zinc-100 hover:text-red-600"
+                        className={favoriteModelDeleteBtn}
                         onClick={() => removeFavoriteModel(model)}
                         aria-label={`移除常用模型 ${model}`}
                       >
