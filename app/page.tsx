@@ -172,7 +172,7 @@ const STORAGE_KEY = "ai-key-vault-configs-v1";
 const LEGACY_STORAGE_KEYS = ["ai-key-vault-configs", "ai-key-check-configs-v1"];
 const INTRO_SEEN_KEY = "ai-key-vault-intro-seen-v1";
 const FAVORITE_MODELS_KEY = "ai-key-vault-favorite-models-v1";
-const SOURCE_REPO_URL = "https://github.com/Yoan98/ai-key-manage";
+const SOURCE_REPO_URL = "https://github.com/WolfCat-ICE/ai-key-manage-plus";
 const PASS_TEXT = "主人，快鞭策我吧";
 const FAIL_TEXT = "主人，我不行了";
 const DEFAULT_BENCHMARK_ROUNDS = 2;
@@ -3273,7 +3273,7 @@ export default function Home() {
             </span>
             <div>
               <p className="text-sm font-semibold text-zinc-900">项目源码 GitHub</p>
-              <p className="text-xs text-zinc-500">Yoan98/ai-key-manage</p>
+              <p className="text-xs text-zinc-500">WolfCat-ICE/ai-key-manage-plus fork Yoan98/ai-key-manage</p>
             </div>
           </div>
           <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 transition group-hover:border-emerald-300 group-hover:bg-emerald-100">
