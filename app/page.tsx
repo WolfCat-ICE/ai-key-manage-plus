@@ -1673,6 +1673,8 @@ export default function Home() {
   const [benchmarkDetailModel, setBenchmarkDetailModel] = useState("");
   const [introExpanded, setIntroExpanded] = useState(false);
   const [favoriteModels, setFavoriteModels] = useState<string[]>([]);
+  const [hasHydratedConfigs, setHasHydratedConfigs] = useState(false);
+  const [hasHydratedFavoriteModels, setHasHydratedFavoriteModels] = useState(false);
   const [showAddModelDialog, setShowAddModelDialog] = useState(false);
   const [showBatchExclusionSummary, setShowBatchExclusionSummary] = useState(false);
   const [newModelInput, setNewModelInput] = useState("");
@@ -1685,17 +1687,19 @@ export default function Home() {
 
   useEffect(() => {
     const { configs: restoredConfigs, sourceKey } = loadConfigsFromStorage(localStorage);
-    if (restoredConfigs.length === 0) return;
-
-    setConfigs(restoredConfigs);
-    if (sourceKey && sourceKey !== STORAGE_KEY) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(restoredConfigs));
+    if (restoredConfigs.length > 0) {
+      setConfigs(restoredConfigs);
+      if (sourceKey && sourceKey !== STORAGE_KEY) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(restoredConfigs));
+      }
     }
+    setHasHydratedConfigs(true);
   }, []);
 
   useEffect(() => {
+    if (!hasHydratedConfigs) return;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(configs));
-  }, [configs]);
+  }, [configs, hasHydratedConfigs]);
 
   useEffect(() => {
     const seen = localStorage.getItem(INTRO_SEEN_KEY) === "1";
@@ -1714,11 +1718,13 @@ export default function Home() {
         setFavoriteModels([]);
       }
     }
+    setHasHydratedFavoriteModels(true);
   }, []);
 
   useEffect(() => {
+    if (!hasHydratedFavoriteModels) return;
     localStorage.setItem(FAVORITE_MODELS_KEY, JSON.stringify(favoriteModels));
-  }, [favoriteModels]);
+  }, [favoriteModels, hasHydratedFavoriteModels]);
 
   useEffect(() => {
     if (!notice) return;
