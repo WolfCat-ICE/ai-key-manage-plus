@@ -9,6 +9,18 @@ body {
   min-height: 100%;
 }
 
+body {
+  font-family: Arial, "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", sans-serif;
+}
+
+code,
+kbd,
+pre,
+samp,
+.font-mono {
+  font-family: "Cascadia Mono", Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
 button:not(:disabled),
 summary {
   cursor: pointer;

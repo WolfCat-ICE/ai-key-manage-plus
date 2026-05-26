@@ -29,6 +29,7 @@ type StreamTextResult = {
 type TestResponseSource = "stream" | "chat" | "responses";
 type SourcedModelTextResult = ModelTextResult & {
   source: TestResponseSource;
+  firstTokenMs?: number;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {

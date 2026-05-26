@@ -1,7 +1,6 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import Image from "next/image";
 import type { EChartsOption } from "echarts";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -83,6 +82,10 @@ type FinishedTestResult = NonNullable<KeyConfig["lastTest"]>;
 type LastTestDisplay = {
   testedAt: string;
   status: "success" | "error";
+  message: string;
+  detail?: string;
+  responseText?: string;
+  responseSource?: "stream" | "chat" | "responses";
   elapsedMs?: number;
   firstTokenMs?: number;
 };
@@ -970,6 +973,10 @@ function normalizeFinishedTestResult(input: unknown): FinishedTestResult | undef
     firstTokenMs,
     testedAt
   };
+}
+
+function isFinishedTestResult(input: TestResult | LastTestDisplay | undefined): input is FinishedTestResult {
+  return Boolean(input && (input.status === "success" || input.status === "error") && input.testedAt);
 }
 
 function normalizeFinishedProbeResult(input: unknown): FinishedProbeResult | undefined {
@@ -2088,7 +2095,7 @@ export default function Home() {
     const testEntries = configs
       .map((item) => {
         const testResult = resultMap[item.id] || item.lastTest;
-        if (!testResult) return null;
+        if (!isFinishedTestResult(testResult)) return null;
         return buildTestRankingEntry(item.id, item.name || item.model || "未命名配置", item.model, testResult);
       })
       .filter((entry): entry is BenchmarkRankingEntry => Boolean(entry));
@@ -3209,13 +3216,12 @@ export default function Home() {
       <header className="grid gap-3 xl:grid-cols-[minmax(16rem,0.6fr)_minmax(0,1.35fr)_380px]">
         <div>
           <h1 className="flex items-center gap-2.5 text-2xl font-bold tracking-tight text-zinc-900 sm:text-3xl">
-            <Image
+            <img
               src="/logo.png"
               alt="Logo"
               width={32}
               height={32}
               className="h-8 w-8 rounded-lg object-cover ring-1 ring-emerald-200 sm:h-9 sm:w-9"
-              priority
             />
             <span>AI Key Vault</span>
           </h1>

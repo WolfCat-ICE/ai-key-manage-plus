@@ -4,9 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node scripts/build-standalone.mjs",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "next:build": "next build"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.16",
