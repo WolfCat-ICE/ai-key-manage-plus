@@ -169,6 +169,12 @@ type ProbeRunResult = {
   ok: boolean;
   result?: FinishedProbeResult;
 };
+type PublicConfigListResponse = {
+  configs?: unknown[];
+};
+type PublicConfigSaveResponse = {
+  config?: unknown;
+};
 type CcSwitchAction = {
   label: string;
   onClick: () => void;
@@ -1591,6 +1597,32 @@ function normalizeStoredConfigs(raw: string): KeyConfig[] {
   return normalized;
 }
 
+function mergeConfigsByIdentity(primary: KeyConfig[], secondary: KeyConfig[]): KeyConfig[] {
+  const merged: KeyConfig[] = [];
+  const seen = new Set<string>();
+
+  for (const item of [...primary, ...secondary]) {
+    const key = `${normalizeBaseUrl(item.baseUrl)}__${cleanKey(item.apiKey)}__${item.model.trim()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+
+  return merged;
+}
+
+function normalizePublicConfigList(payload: unknown): KeyConfig[] {
+  if (!isRecord(payload) || !Array.isArray(payload.configs)) return [];
+  return payload.configs
+    .map((item, index) => normalizeStoredConfigItem(item, index))
+    .filter((item): item is KeyConfig => Boolean(item));
+}
+
+function normalizePublicConfigSave(payload: unknown): KeyConfig | null {
+  if (!isRecord(payload)) return null;
+  return normalizeStoredConfigItem(payload.config, 0) || null;
+}
+
 function loadConfigsFromStorage(storage: Storage): { configs: KeyConfig[]; sourceKey?: string } {
   const candidateKeys = [STORAGE_KEY, ...LEGACY_STORAGE_KEYS];
 
@@ -1705,14 +1737,37 @@ export default function Home() {
   } | null>(null);
 
   useEffect(() => {
-    const { configs: restoredConfigs, sourceKey } = loadConfigsFromStorage(localStorage);
-    if (restoredConfigs.length > 0) {
-      setConfigs(restoredConfigs);
+    let cancelled = false;
+
+    async function restoreConfigs() {
+      const { configs: restoredConfigs, sourceKey } = loadConfigsFromStorage(localStorage);
+      let nextConfigs = restoredConfigs;
+
       if (sourceKey && sourceKey !== STORAGE_KEY) {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(restoredConfigs));
       }
+
+      try {
+        const payload = (await fetchJsonWithTimeout(
+          "/api/public-configs",
+          { method: "GET" },
+          15000
+        )) as PublicConfigListResponse;
+        const publicConfigs = normalizePublicConfigList(payload);
+        nextConfigs = mergeConfigsByIdentity(publicConfigs, restoredConfigs);
+      } catch {
+        nextConfigs = restoredConfigs;
+      }
+
+      if (cancelled) return;
+      setConfigs(nextConfigs);
+      setHasHydratedConfigs(true);
     }
-    setHasHydratedConfigs(true);
+
+    void restoreConfigs();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -2387,6 +2442,46 @@ export default function Home() {
     const item = addItem(name, baseUrl, apiKey, model, formSourceMeta);
     setNotice("保存成功，开始自动识别并测试...");
     void autoProbeAndTestConfig(item);
+  }
+
+  async function saveAndPublishConfig() {
+    const baseUrl = normalizeBaseUrl(form.baseUrl);
+    const apiKey = cleanKey(form.apiKey);
+    const model = form.model.trim();
+    const name = form.name.trim() || makeNameFromBaseUrlAndModel(baseUrl, model) || makeDefaultName(nextIndex);
+
+    if (!baseUrl || !apiKey) {
+      setNotice("保存并公开需要填写地址和 Key");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "保存并公开会把完整 Key 写入服务端 SQLite。其他能访问此服务的人可能读取这条配置，确认继续吗？"
+    );
+    if (!confirmed) return;
+
+    try {
+      setNotice("正在保存到 SQLite...");
+      const response = await postJsonWithTimeout<PublicConfigSaveResponse>(
+        "/api/public-configs",
+        { name, baseUrl, apiKey, model },
+        15000
+      );
+      const item = normalizePublicConfigSave(response);
+      if (!item) {
+        setNotice("公开配置保存成功，但返回数据无法识别");
+        return;
+      }
+
+      setConfigs((prev) => mergeConfigsByIdentity([item], prev));
+      setForm({ name: "", baseUrl: "", apiKey: "", model: "" });
+      setFormSourceMeta(undefined);
+      setPasteRaw("");
+      setNotice("已保存并公开，开始自动识别并测试...");
+      void autoProbeAndTestConfig(item);
+    } catch (error: unknown) {
+      setNotice(`保存并公开失败：${getErrorMessage(error) || "请稍后重试"}`);
+    }
   }
 
   function removeConfig(id: string) {
@@ -3480,6 +3575,10 @@ export default function Home() {
               <button type="submit" className={btnPrimary}>
                 <FaSave aria-hidden />
                 <span>保存配置</span>
+              </button>
+              <button type="button" className={btnGhost} onClick={saveAndPublishConfig}>
+                <FaFileExport aria-hidden />
+                <span>保存并公开</span>
               </button>
             </div>
           </form>

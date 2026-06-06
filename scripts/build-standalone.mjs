@@ -41,5 +41,9 @@ async function copyIfExists(from, to) {
 await runNextBuild();
 await copyIfExists(join(root, "public"), join(standaloneDir, "public"));
 await copyIfExists(join(distDir, "static"), join(standaloneDir, "dist", "static"));
+await copyIfExists(
+  join(root, "node_modules", "sql.js", "dist"),
+  join(standaloneDir, "node_modules", "sql.js", "dist")
+);
 
 console.log("Standalone deployment package is ready at dist/standalone");
