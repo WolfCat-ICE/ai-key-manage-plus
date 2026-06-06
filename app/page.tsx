@@ -345,7 +345,7 @@ const STRUCTURED_FIELD_RULES: StructuredFieldRule[] = [
   {
     field: "baseUrl",
     labelPattern:
-      "(?:base\\s*url|base_url|base-url|api\\s*base|api_base|api-base|api\\s*url|api_url|api-url|endpoint|url|地址|接口地址|请求地址|服务地址|域名|host)",
+      "(?:base\\s*url|base_url|base-url|api\\s*base|api_base|api-base|api\\s*url|api_url|api-url|endpoint|url|地址|接口地址|请求地址|服务地址|中转平台|中转地址|平台地址|平台|域名|host)",
     normalize: (value) => normalizeBaseUrl(normalizeParsedFieldValue(value))
   },
   {
@@ -378,6 +378,10 @@ function hasAnyParsedField(item: Partial<ParsedConfig>): boolean {
 
 function hasCoreParsedField(item: Partial<ParsedConfig>): boolean {
   return Boolean(item.baseUrl || item.apiKey || item.model);
+}
+
+function hasPairableParsedFields(item: Partial<ParsedConfig>): boolean {
+  return Boolean(item.baseUrl && item.apiKey);
 }
 
 function mergeParsedConfig(base: Partial<ParsedConfig>, incoming: Partial<ParsedConfig>): Partial<ParsedConfig> {
@@ -717,7 +721,7 @@ function parsePastedConfigs(input: string, startIndex: number): ParsedConfig[] {
     const line = rawLine.trim();
 
     if (!line) {
-      if (hasCoreParsedField(current)) {
+      if (hasPairableParsedFields(current)) {
         structuredItems.push(current);
         current = {};
       }
