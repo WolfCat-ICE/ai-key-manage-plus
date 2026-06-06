@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import type { EChartsOption } from "echarts";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   FaBolt,
   FaCheckCircle,
@@ -165,6 +165,10 @@ type BenchmarkRankingEntry = {
 type ParsedConfig = FormState & {
   sourceMeta?: KeyConfig["sourceMeta"];
 };
+type ProbeRunResult = {
+  ok: boolean;
+  result?: FinishedProbeResult;
+};
 type CcSwitchAction = {
   label: string;
   onClick: () => void;
@@ -176,6 +180,8 @@ const LEGACY_STORAGE_KEYS = ["ai-key-vault-configs", "ai-key-check-configs-v1"];
 const INTRO_SEEN_KEY = "ai-key-vault-intro-seen-v1";
 const FAVORITE_MODELS_KEY = "ai-key-vault-favorite-models-v1";
 const SOURCE_REPO_URL = "https://github.com/WolfCat-ICE/ai-key-manage-plus";
+const CONFIG_LIST_INITIAL_COUNT = 24;
+const CONFIG_LIST_BATCH_COUNT = 24;
 const PASS_TEXT = "主人，快鞭策我吧";
 const FAIL_TEXT = "主人，我不行了";
 const DEFAULT_BENCHMARK_ROUNDS = 2;
@@ -1685,6 +1691,8 @@ export default function Home() {
   const [showAddModelDialog, setShowAddModelDialog] = useState(false);
   const [showBatchExclusionSummary, setShowBatchExclusionSummary] = useState(false);
   const [newModelInput, setNewModelInput] = useState("");
+  const [visibleConfigCount, setVisibleConfigCount] = useState(CONFIG_LIST_INITIAL_COUNT);
+  const deferredConfigSearch = useDeferredValue(configSearch);
   const [confirmDialog, setConfirmDialog] = useState<{
     show: boolean;
     title: string;
@@ -1743,7 +1751,7 @@ export default function Home() {
   const excludedConfigs = useMemo(() => configs.filter((item) => item.excludeFromBatchTest), [configs]);
   const batchTestableConfigs = useMemo(() => configs.filter((item) => !item.excludeFromBatchTest), [configs]);
   const filteredConfigs = useMemo(() => {
-    const query = configSearch.trim().toLowerCase();
+    const query = deferredConfigSearch.trim().toLowerCase();
 
     return configs.filter((item) => {
       const result = resultMap[item.id] || item.lastTest || defaultTestResult();
@@ -1755,7 +1763,12 @@ export default function Home() {
       const matchesStatus = configStatusFilter === "all" || result.status === configStatusFilter;
       return matchesSearch && matchesStatus;
     });
-  }, [configSearch, configStatusFilter, configs, resultMap]);
+  }, [deferredConfigSearch, configStatusFilter, configs, resultMap]);
+  const visibleConfigs = useMemo(
+    () => filteredConfigs.slice(0, visibleConfigCount),
+    [filteredConfigs, visibleConfigCount]
+  );
+  const hasMoreConfigs = visibleConfigs.length < filteredConfigs.length;
   const configStatusCounts = useMemo(() => {
     const counts: Record<"all" | TestStatus, number> = {
       all: configs.length,
@@ -1772,6 +1785,10 @@ export default function Home() {
 
     return counts;
   }, [configs, resultMap]);
+
+  useEffect(() => {
+    setVisibleConfigCount(CONFIG_LIST_INITIAL_COUNT);
+  }, [deferredConfigSearch, configStatusFilter]);
   const ccSwitchDialogItem = useMemo(
     () => configs.find((item) => item.id === ccSwitchDialogId) || null,
     [configs, ccSwitchDialogId]
@@ -2302,6 +2319,7 @@ export default function Home() {
     setForm({ name: "", baseUrl: "", apiKey: "", model: "" });
     setFormSourceMeta(undefined);
     setPasteRaw("");
+    return item;
   }
 
   function addFromPaste() {
@@ -2325,7 +2343,8 @@ export default function Home() {
     setForm({ name: "", baseUrl: "", apiKey: "", model: "" });
     setFormSourceMeta(undefined);
     setPasteRaw("");
-    setNotice(`已新增 ${newItems.length} 个配置`);
+    setNotice(`已新增 ${newItems.length} 个配置，开始自动识别并测试...`);
+    void autoProbeAndTestConfigs(newItems);
   }
 
   function addConfig(e: React.FormEvent<HTMLFormElement>) {
@@ -2352,16 +2371,18 @@ export default function Home() {
         title: "检测到重复配置",
         message: `已存在相同的配置：\n\n名称：${name}\n地址：${baseUrl}\nKey：${apiKey.slice(0, 10)}...\n\n是否仍要添加？`,
         onConfirm: () => {
-          addItem(name, baseUrl, apiKey, model, formSourceMeta);
-          setNotice("保存成功");
+          const item = addItem(name, baseUrl, apiKey, model, formSourceMeta);
+          setNotice("保存成功，开始自动识别并测试...");
+          void autoProbeAndTestConfig(item);
           setConfirmDialog(null);
         }
       });
       return;
     }
 
-    addItem(name, baseUrl, apiKey, model, formSourceMeta);
-    setNotice("保存成功");
+    const item = addItem(name, baseUrl, apiKey, model, formSourceMeta);
+    setNotice("保存成功，开始自动识别并测试...");
+    void autoProbeAndTestConfig(item);
   }
 
   function removeConfig(id: string) {
@@ -2584,7 +2605,7 @@ export default function Home() {
     setNotice("已清空排除清单");
   }
 
-  async function runModelProbe(item: KeyConfig): Promise<boolean> {
+  async function runModelProbe(item: KeyConfig): Promise<ProbeRunResult> {
     setProbeMap((prev) => ({
       ...prev,
       [item.id]: {
@@ -2597,13 +2618,14 @@ export default function Home() {
     const apiKey = cleanKey(item.apiKey);
 
     if (!baseUrl || !apiKey) {
-      commitFinishedProbeResult(item.id, {
+      const result: FinishedProbeResult = {
         status: "error",
         supportedModels: [],
         detail: "地址或 Key 为空，无法探测模型",
         testedAt: new Date().toISOString()
-      });
-      return false;
+      };
+      commitFinishedProbeResult(item.id, result);
+      return { ok: false, result };
     }
 
     try {
@@ -2617,15 +2639,16 @@ export default function Home() {
         20000
       );
       commitFinishedProbeResult(item.id, response.result);
-      return response.ok;
+      return { ok: response.ok, result: response.result };
     } catch (error: unknown) {
-      commitFinishedProbeResult(item.id, {
+      const result: FinishedProbeResult = {
         status: "error",
         supportedModels: [],
         detail: makeErrorDetail(error),
         testedAt: new Date().toISOString()
-      });
-      return false;
+      };
+      commitFinishedProbeResult(item.id, result);
+      return { ok: false, result };
     }
   }
 
@@ -2850,8 +2873,35 @@ export default function Home() {
     );
   }
 
+  async function autoProbeAndTestConfig(item: KeyConfig): Promise<boolean> {
+    setNotice(`${item.name} 开始自动识别模型...`);
+    const probeRun = await runModelProbe(item);
+    const testItem =
+      !item.model && probeRun.result?.recommendedModel
+        ? { ...item, model: probeRun.result.recommendedModel }
+        : item;
+
+    setNotice(`${item.name} 模型识别${probeRun.ok ? "完成" : "失败"}，开始自动测试...`);
+    const testOk = await runTest(testItem);
+    setNotice(
+      `${item.name} 自动流程完成：识别${probeRun.ok ? "成功" : "失败"}，测试${testOk ? "通过" : "失败"}`
+    );
+    return probeRun.ok && testOk;
+  }
+
+  async function autoProbeAndTestConfigs(items: KeyConfig[]) {
+    let okCount = 0;
+    for (const item of items) {
+      const ok = await autoProbeAndTestConfig(item);
+      if (ok) okCount += 1;
+    }
+    if (items.length > 1) {
+      setNotice(`自动识别并测试完成：通过 ${okCount}，失败 ${items.length - okCount}`);
+    }
+  }
+
   async function probeConfig(item: KeyConfig) {
-    const ok = await runModelProbe(item);
+    const { ok } = await runModelProbe(item);
     setProbeDialogId(item.id);
     setNotice(ok ? `${item.name} 模型探测完成` : `${item.name} 模型探测失败`);
   }
@@ -2865,7 +2915,7 @@ export default function Home() {
     setProbingAll(true);
     setNotice("开始探测全部模型...");
     const result = await Promise.all(configs.map((item) => runModelProbe(item)));
-    const okCount = result.filter(Boolean).length;
+    const okCount = result.filter((item) => item.ok).length;
     setProbingAll(false);
     setNotice(`探测完成：成功 ${okCount}，失败 ${result.length - okCount}`);
   }
@@ -3439,6 +3489,12 @@ export default function Home() {
               <span className="text-xs text-zinc-500">
                 {filteredConfigs.length} / {configs.length}
               </span>
+              {configSearch !== deferredConfigSearch ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-500">
+                  <FaSpinner className="animate-spin" aria-hidden />
+                  筛选中
+                </span>
+              ) : null}
             </div>
             <div className="grid gap-2">
               <ClearableField value={configSearch} onClear={() => setConfigSearch("")}>
@@ -3554,7 +3610,7 @@ export default function Home() {
             <p className="text-sm text-zinc-500">当前筛选条件下无结果</p>
           ) : (
             <ul className="grid gap-2.5">
-              {filteredConfigs.map((item) => {
+              {visibleConfigs.map((item) => {
                 const testing = loadingMap[item.id];
                 const result = resultMap[item.id] || item.lastTest || defaultTestResult();
                 const lastTestElapsedMs =
@@ -3973,6 +4029,25 @@ export default function Home() {
               })}
             </ul>
           )}
+          {filteredConfigs.length > 0 ? (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-zinc-100 pt-3">
+              <span className="text-xs text-zinc-500">
+                已显示 {visibleConfigs.length} / {filteredConfigs.length} 条
+              </span>
+              {hasMoreConfigs ? (
+                <button
+                  type="button"
+                  className={topBtnGhost}
+                  onClick={() => setVisibleConfigCount((count) => count + CONFIG_LIST_BATCH_COUNT)}
+                >
+                  <FaChevronDown aria-hidden />
+                  <span>加载更多 {Math.min(CONFIG_LIST_BATCH_COUNT, filteredConfigs.length - visibleConfigs.length)} 条</span>
+                </button>
+              ) : (
+                <span className="text-xs text-zinc-400">已展示当前筛选下的全部配置</span>
+              )}
+            </div>
+          ) : null}
         </section>
 
         <aside className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3 shadow-sm">

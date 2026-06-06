@@ -74,7 +74,7 @@ npm install
 npm run dev
 ```
 
-打开 [http://localhost:3000](http://localhost:3000) 就能开始用。
+打开 [http://localhost:3001](http://localhost:3001) 就能开始用。
 
 ## 打包部署
 
