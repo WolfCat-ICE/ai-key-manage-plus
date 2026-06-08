@@ -24,6 +24,13 @@ export type PublicConfigRecord = {
   };
 };
 
+export type PreferredModelRecord = {
+  model: string;
+  sortOrder: number;
+};
+
+export const DEFAULT_PREFERRED_MODELS = ["gpt-5.5", "claude-opus-4-7"];
+
 const DATA_DIR = path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "public-configs.sqlite3");
 
@@ -85,7 +92,25 @@ function ensureSchema(db: Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_public_configs_created_at
       ON public_configs(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS preferred_models (
+      model TEXT PRIMARY KEY,
+      sort_order INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
+
+  const count = Number(db.exec("SELECT COUNT(*) FROM preferred_models")[0]?.values[0]?.[0] || 0);
+  if (count === 0) {
+    const now = new Date().toISOString();
+    for (let index = 0; index < DEFAULT_PREFERRED_MODELS.length; index += 1) {
+      db.run(
+        "INSERT INTO preferred_models (model, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?)",
+        [DEFAULT_PREFERRED_MODELS[index], index, now, now]
+      );
+    }
+  }
 }
 
 async function saveDatabase(db: Database) {
@@ -186,4 +211,36 @@ export async function createPublicConfig(input: PublicConfigInput): Promise<Publ
       kind: "manual"
     }
   };
+}
+
+export async function listPreferredModels(): Promise<string[]> {
+  return withDatabase((db) => {
+    const result = db.exec(`
+      SELECT model
+      FROM preferred_models
+      ORDER BY sort_order ASC, created_at ASC
+    `);
+    return (result[0]?.values || []).map((row) => String(row[0] || "").trim()).filter(Boolean);
+  });
+}
+
+export async function replacePreferredModels(models: string[]): Promise<string[]> {
+  const normalized = [...new Set(models.map((model) => model.trim()).filter(Boolean))];
+  const nextModels = normalized.length > 0 ? normalized : [...DEFAULT_PREFERRED_MODELS];
+  const now = new Date().toISOString();
+
+  await withDatabase(
+    (db) => {
+      db.run("DELETE FROM preferred_models");
+      for (let index = 0; index < nextModels.length; index += 1) {
+        db.run(
+          "INSERT INTO preferred_models (model, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?)",
+          [nextModels[index], index, now, now]
+        );
+      }
+    },
+    true
+  );
+
+  return nextModels;
 }

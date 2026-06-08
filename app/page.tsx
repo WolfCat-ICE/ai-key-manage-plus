@@ -175,6 +175,9 @@ type PublicConfigListResponse = {
 type PublicConfigSaveResponse = {
   config?: unknown;
 };
+type PreferredModelsResponse = {
+  models?: unknown[];
+};
 type CcSwitchAction = {
   label: string;
   onClick: () => void;
@@ -230,6 +233,8 @@ const favoriteModelChipBtn =
   "inline-flex items-center rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs text-zinc-700 transition hover:border-emerald-300 hover:bg-emerald-50";
 const favoriteModelDeleteBtn =
   "absolute -right-1 -top-1 inline-flex h-4.5 w-4.5 items-center justify-center rounded-full border border-white bg-zinc-200 text-[10px] font-semibold leading-none text-zinc-600 opacity-0 shadow-sm transition group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-red-500 hover:text-white focus:outline-none focus:ring-2 focus:ring-emerald-100 focus:opacity-100";
+const favoriteModelOrderBtn =
+  "inline-flex h-5 w-5 items-center justify-center rounded-md border border-zinc-200 bg-white text-[10px] text-zinc-500 opacity-0 shadow-sm transition group-hover:opacity-100 group-focus-within:opacity-100 hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-30";
 const floatingClearBtn =
   "absolute right-3 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 focus:outline-none focus:ring-2 focus:ring-emerald-100";
 const endpointHintText = "地址只填域名也可以，系统会自动兼容 /v1、/chat/completions、/responses；测试会兼容流式、普通响应和 Responses，并优先展示信息量更高的那份回复。";
@@ -1623,6 +1628,11 @@ function normalizePublicConfigSave(payload: unknown): KeyConfig | null {
   return normalizeStoredConfigItem(payload.config, 0) || null;
 }
 
+function normalizePreferredModelsPayload(payload: unknown): string[] {
+  if (!isRecord(payload) || !Array.isArray(payload.models)) return [];
+  return payload.models.map((item) => String(item).trim()).filter(Boolean);
+}
+
 function loadConfigsFromStorage(storage: Storage): { configs: KeyConfig[]; sourceKey?: string } {
   const candidateKeys = [STORAGE_KEY, ...LEGACY_STORAGE_KEYS];
 
@@ -1784,15 +1794,38 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    const stored = localStorage.getItem(FAVORITE_MODELS_KEY);
-    if (stored) {
+    let cancelled = false;
+
+    async function restoreFavoriteModels() {
+      const stored = localStorage.getItem(FAVORITE_MODELS_KEY);
+      let nextModels: string[] = [];
+
       try {
-        setFavoriteModels(JSON.parse(stored));
+        const payload = (await fetchJsonWithTimeout(
+          "/api/preferred-models",
+          { method: "GET" },
+          15000
+        )) as PreferredModelsResponse;
+        nextModels = normalizePreferredModelsPayload(payload);
       } catch {
-        setFavoriteModels([]);
+        if (stored) {
+          try {
+            nextModels = JSON.parse(stored);
+          } catch {
+            nextModels = [];
+          }
+        }
       }
+
+      if (cancelled) return;
+      setFavoriteModels(nextModels);
+      setHasHydratedFavoriteModels(true);
     }
-    setHasHydratedFavoriteModels(true);
+
+    void restoreFavoriteModels();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -2733,7 +2766,8 @@ export default function Home() {
         {
           baseUrl,
           apiKey,
-          currentModel: item.model
+          currentModel: item.model,
+          preferredModels: favoriteModels
         },
         20000
       );
@@ -3329,6 +3363,31 @@ export default function Home() {
     setModelDraft("");
   }
 
+  async function persistFavoriteModels(models: string[]): Promise<string[]> {
+    localStorage.setItem(FAVORITE_MODELS_KEY, JSON.stringify(models));
+    const response = await postJsonWithTimeout<PreferredModelsResponse>(
+      "/api/preferred-models",
+      { models },
+      15000
+    );
+    const savedModels = normalizePreferredModelsPayload(response);
+    if (savedModels.length > 0) {
+      localStorage.setItem(FAVORITE_MODELS_KEY, JSON.stringify(savedModels));
+    }
+    return savedModels.length > 0 ? savedModels : models;
+  }
+
+  function saveFavoriteModels(models: string[], noticeText: string) {
+    const nextModels = [...new Set(models.map((item) => item.trim()).filter(Boolean))];
+    setFavoriteModels(nextModels);
+    setNotice(noticeText);
+    void persistFavoriteModels(nextModels)
+      .then((savedModels) => setFavoriteModels(savedModels))
+      .catch((error: unknown) => {
+        setNotice(`优先模型保存到 SQLite 失败：${getErrorMessage(error) || "请稍后重试"}`);
+      });
+  }
+
   function addFavoriteModel(model: string) {
     const trimmed = model.trim();
     if (!trimmed) {
@@ -3339,8 +3398,7 @@ export default function Home() {
       setNotice("该模型已存在");
       return;
     }
-    setFavoriteModels((prev) => [...prev, trimmed]);
-    setNotice(`已添加常用模型：${trimmed}`);
+    saveFavoriteModels([...favoriteModels, trimmed], `已添加常用模型：${trimmed}`);
     setShowAddModelDialog(false);
     setNewModelInput("");
   }
@@ -3351,8 +3409,17 @@ export default function Home() {
   }
 
   function removeFavoriteModel(model: string) {
-    setFavoriteModels((prev) => prev.filter((m) => m !== model));
-    setNotice(`已移除常用模型：${model}`);
+    saveFavoriteModels(favoriteModels.filter((m) => m !== model), `已移除常用模型：${model}`);
+  }
+
+  function moveFavoriteModel(model: string, direction: -1 | 1) {
+    const index = favoriteModels.indexOf(model);
+    const nextIndex = index + direction;
+    if (index < 0 || nextIndex < 0 || nextIndex >= favoriteModels.length) return;
+
+    const nextModels = [...favoriteModels];
+    [nextModels[index], nextModels[nextIndex]] = [nextModels[nextIndex], nextModels[index]];
+    saveFavoriteModels(nextModels, `已调整 ${model} 的优先级`);
   }
 
   function applyFavoriteModel(model: string) {
@@ -3382,7 +3449,7 @@ export default function Home() {
             <h3 className="flex h-7 items-center text-sm font-semibold text-zinc-700">常用模型</h3>
             {favoriteModels.length > 0 ? (
               <div className="flex min-w-0 flex-wrap gap-1.5">
-                {favoriteModels.map((model) => (
+                {favoriteModels.map((model, index) => (
                   <div key={model} className="group relative inline-flex">
                     <button
                       type="button"
@@ -3391,6 +3458,28 @@ export default function Home() {
                     >
                       <span>{model}</span>
                     </button>
+                    <span className="ml-1 inline-flex items-center gap-0.5">
+                      <button
+                        type="button"
+                        className={favoriteModelOrderBtn}
+                        onClick={() => moveFavoriteModel(model, -1)}
+                        disabled={index === 0}
+                        title="上移优先级"
+                        aria-label={`上移 ${model}`}
+                      >
+                        <FaChevronUp aria-hidden />
+                      </button>
+                      <button
+                        type="button"
+                        className={favoriteModelOrderBtn}
+                        onClick={() => moveFavoriteModel(model, 1)}
+                        disabled={index === favoriteModels.length - 1}
+                        title="下移优先级"
+                        aria-label={`下移 ${model}`}
+                      >
+                        <FaChevronDown aria-hidden />
+                      </button>
+                    </span>
                     <button
                       type="button"
                       className={favoriteModelDeleteBtn}
@@ -3535,7 +3624,7 @@ export default function Home() {
                   </button>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {favoriteModels.map((model) => (
+                  {favoriteModels.map((model, index) => (
                     <div key={model} className="group relative inline-flex">
                       <button
                         type="button"
@@ -3544,6 +3633,28 @@ export default function Home() {
                       >
                         <span>{model}</span>
                       </button>
+                      <span className="ml-1 inline-flex items-center gap-0.5">
+                        <button
+                          type="button"
+                          className={favoriteModelOrderBtn}
+                          onClick={() => moveFavoriteModel(model, -1)}
+                          disabled={index === 0}
+                          title="上移优先级"
+                          aria-label={`上移 ${model}`}
+                        >
+                          <FaChevronUp aria-hidden />
+                        </button>
+                        <button
+                          type="button"
+                          className={favoriteModelOrderBtn}
+                          onClick={() => moveFavoriteModel(model, 1)}
+                          disabled={index === favoriteModels.length - 1}
+                          title="下移优先级"
+                          aria-label={`下移 ${model}`}
+                        >
+                          <FaChevronDown aria-hidden />
+                        </button>
+                      </span>
                       <button
                         type="button"
                         className={favoriteModelDeleteBtn}

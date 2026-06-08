@@ -665,12 +665,18 @@ async function requestModelTextStream(
   }
 }
 
-function chooseRecommendedModel(currentModel: string, models: string[]): string {
+function chooseRecommendedModel(currentModel: string, models: string[], preferredModels: string[] = []): string {
   const normalized = models.map((item) => item.trim()).filter(Boolean);
+
   const current = currentModel.trim();
   if (current && normalized.includes(current)) return current;
 
-  for (const candidate of MODEL_CANDIDATES) {
+  for (const candidate of preferredModels) {
+    const preferred = candidate.trim();
+    if (preferred && normalized.includes(preferred)) return preferred;
+  }
+
+  for (const candidate of uniqueStrings([...preferredModels, ...MODEL_CANDIDATES])) {
     if (normalized.includes(candidate)) return candidate;
   }
 
@@ -774,6 +780,7 @@ export async function runOpenAIProbe(input: OpenAIProxyProbeRequest): Promise<Op
   const baseUrl = toOpenAIBaseUrl(input.baseUrl);
   const apiKey = cleanKey(input.apiKey);
   const currentModel = input.currentModel?.trim() || "";
+  const preferredModels = Array.isArray(input.preferredModels) ? input.preferredModels : [];
   const testedAt = new Date().toISOString();
 
   if (!baseUrl || !apiKey) {
@@ -807,7 +814,7 @@ export async function runOpenAIProbe(input: OpenAIProxyProbeRequest): Promise<Op
         result: {
           status: "success",
           supportedModels,
-          recommendedModel: chooseRecommendedModel(currentModel, supportedModels) || undefined,
+          recommendedModel: chooseRecommendedModel(currentModel, supportedModels, preferredModels) || undefined,
           detail: `读取 /models 成功，共识别 ${supportedModels.length} 个模型`,
           testedAt,
         },
@@ -836,7 +843,7 @@ export async function runOpenAIProbe(input: OpenAIProxyProbeRequest): Promise<Op
       result: {
         status: "success",
         supportedModels,
-        recommendedModel: chooseRecommendedModel(currentModel, supportedModels) || undefined,
+        recommendedModel: chooseRecommendedModel(currentModel, supportedModels, preferredModels) || undefined,
         detail: `已通过候选模型试探识别 ${supportedModels.length} 个模型${modelsError ? `；/models：${modelsError}` : ""}`,
         testedAt,
       },

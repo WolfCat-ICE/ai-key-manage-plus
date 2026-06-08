@@ -23,6 +23,7 @@ export type OpenAIProxyTestResponse = {
 
 export type OpenAIProxyProbeRequest = OpenAIProxyBaseRequest & {
   currentModel?: string;
+  preferredModels?: string[];
 };
 
 export type OpenAIProxyProbeResponse = {
