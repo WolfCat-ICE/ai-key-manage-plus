@@ -40,6 +40,7 @@ type KeyConfig = {
   apiKey: string;
   model: string;
   createdAt: string;
+  isPublic?: boolean;
   excludeFromBatchTest?: boolean;
   sourceMeta?: {
     kind: "manual" | "cc-switch-provider" | "cc-switch-deeplink";
@@ -1451,6 +1452,20 @@ async function postJsonWithTimeout<TResponse>(url: string, body: unknown, timeou
   )) as TResponse;
 }
 
+async function patchJsonWithTimeout<TResponse>(url: string, body: unknown, timeoutMs: number): Promise<TResponse> {
+  return (await fetchJsonWithTimeout(
+    url,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    },
+    timeoutMs
+  )) as TResponse;
+}
+
 function inferCcSwitchHomepage(endpoint: string): string {
   try {
     const parsed = new URL(endpoint);
@@ -1567,13 +1582,14 @@ function normalizeStoredConfigItem(input: unknown, index: number): KeyConfig | u
   const probe = normalizeFinishedProbeResult(input.probe || input.probeResult || input.modelProbe);
   const lastTest = normalizeFinishedTestResult(input.lastTest || input.lastResult || input.testResult);
   const benchmarks = normalizeStoredBenchmarks(input.benchmarks || input.modelBenchmarks || input.benchmarkResults);
+  const isPublic = input.isPublic === true;
   const hasCoreValue = Boolean(rawName || baseUrl || apiKey || model || probe || lastTest || benchmarks);
 
   if (!hasCoreValue) return undefined;
 
   const name = rawName || makeDefaultName(index + 1);
   const excludeFromBatchTest = input.excludeFromBatchTest === true;
-  return { id, name, baseUrl, apiKey, model, createdAt, excludeFromBatchTest, sourceMeta, probe, lastTest, benchmarks };
+  return { id, name, baseUrl, apiKey, model, createdAt, isPublic, excludeFromBatchTest, sourceMeta, probe, lastTest, benchmarks };
 }
 
 function toStoredConfigCandidates(parsed: unknown): unknown[] {
@@ -2574,13 +2590,41 @@ export default function Home() {
     setNotice("已删除全部配置");
   }
 
-  function commitFinishedTestResult(id: string, result: FinishedTestResult) {
+  function persistPublicConfigResults(
+    id: string,
+    body: {
+      model?: string;
+      lastTest?: FinishedTestResult;
+      probe?: FinishedProbeResult;
+      benchmarks?: Record<string, FinishedModelBenchmarkResult>;
+    }
+  ) {
+    void patchJsonWithTimeout<{ ok: boolean }>(
+      `/api/public-configs/${encodeURIComponent(id)}/results`,
+      body,
+      15000
+    ).catch((error: unknown) => {
+      setNotice(`公开配置测试数据保存失败：${getErrorMessage(error) || "请稍后重试"}`);
+    });
+  }
+
+  function commitFinishedTestResult(id: string, result: FinishedTestResult, testedModel = "") {
     setResultMap((prev) => ({ ...prev, [id]: result }));
     setConfigs((prev) => prev.map((item) => (item.id === id ? { ...item, lastTest: result } : item)));
+
+    const target = configs.find((item) => item.id === id);
+    if (target?.isPublic) {
+      persistPublicConfigResults(id, {
+        model: testedModel || target.model,
+        lastTest: result
+      });
+    }
   }
 
   function commitFinishedProbeResult(id: string, result: FinishedProbeResult) {
     setProbeMap((prev) => ({ ...prev, [id]: result }));
+    const target = configs.find((item) => item.id === id);
+    const nextModel = !target?.model && result.recommendedModel ? result.recommendedModel : target?.model || "";
     setConfigs((prev) =>
       prev.map((item) =>
         item.id === id
@@ -2592,6 +2636,13 @@ export default function Home() {
           : item
         )
     );
+
+    if (target?.isPublic) {
+      persistPublicConfigResults(id, {
+        model: nextModel,
+        probe: result
+      });
+    }
   }
 
   function commitFinishedBenchmarkResult(id: string, model: string, result: FinishedModelBenchmarkResult) {
@@ -2615,6 +2666,16 @@ export default function Home() {
           : item
       )
     );
+
+    const target = configs.find((item) => item.id === id);
+    if (target?.isPublic) {
+      persistPublicConfigResults(id, {
+        benchmarks: {
+          ...(target.benchmarks || {}),
+          [model]: result
+        }
+      });
+    }
   }
 
   function setPendingBenchmarkResult(id: string, model: string, tags: string[]) {
@@ -2663,6 +2724,7 @@ export default function Home() {
 
     const baseUrl = toOpenAIBaseUrl(item.baseUrl);
     const apiKey = cleanKey(item.apiKey);
+    const testModel = item.model || "gpt-4o-mini";
 
     if (!baseUrl || !apiKey) {
       commitFinishedTestResult(item.id, {
@@ -2670,7 +2732,7 @@ export default function Home() {
         message: FAIL_TEXT,
         detail: "地址或 Key 为空",
         testedAt: new Date().toISOString()
-      });
+      }, testModel);
       setLoadingMap((prev) => ({ ...prev, [item.id]: false }));
       return false;
     }
@@ -2681,7 +2743,7 @@ export default function Home() {
         {
           baseUrl,
           apiKey,
-          model: item.model || "gpt-4o-mini"
+          model: testModel
         },
         45000
       );
@@ -2690,7 +2752,7 @@ export default function Home() {
         ...response.result,
         elapsedMs: response.result.status === "success" ? response.result.elapsedMs : undefined,
         firstTokenMs: response.result.status === "success" ? response.result.firstTokenMs : undefined
-      });
+      }, testModel);
       return response.ok;
     } catch (error: unknown) {
       commitFinishedTestResult(item.id, {
@@ -2698,7 +2760,7 @@ export default function Home() {
         message: FAIL_TEXT,
         detail: makeErrorDetail(error),
         testedAt: new Date().toISOString()
-      });
+      }, testModel);
       return false;
     } finally {
       setLoadingMap((prev) => ({ ...prev, [item.id]: false }));

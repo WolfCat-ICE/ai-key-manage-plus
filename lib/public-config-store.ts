@@ -12,6 +12,13 @@ export type PublicConfigInput = {
   createdAt?: string;
 };
 
+export type PublicConfigResultInput = {
+  model?: string;
+  lastTest?: unknown;
+  probe?: unknown;
+  benchmarks?: unknown;
+};
+
 export type PublicConfigRecord = {
   id: string;
   name: string;
@@ -19,6 +26,10 @@ export type PublicConfigRecord = {
   apiKey: string;
   model: string;
   createdAt: string;
+  isPublic: true;
+  lastTest?: unknown;
+  probe?: unknown;
+  benchmarks?: unknown;
   sourceMeta: {
     kind: "manual";
   };
@@ -88,7 +99,10 @@ function ensureSchema(db: Database) {
       api_key TEXT NOT NULL,
       model TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      last_test_json TEXT,
+      probe_json TEXT,
+      benchmarks_json TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_public_configs_created_at
       ON public_configs(created_at DESC);
@@ -101,6 +115,10 @@ function ensureSchema(db: Database) {
     );
   `);
 
+  ensureColumn(db, "public_configs", "last_test_json", "TEXT");
+  ensureColumn(db, "public_configs", "probe_json", "TEXT");
+  ensureColumn(db, "public_configs", "benchmarks_json", "TEXT");
+
   const count = Number(db.exec("SELECT COUNT(*) FROM preferred_models")[0]?.values[0]?.[0] || 0);
   if (count === 0) {
     const now = new Date().toISOString();
@@ -111,6 +129,12 @@ function ensureSchema(db: Database) {
       );
     }
   }
+}
+
+function ensureColumn(db: Database, table: string, column: string, definition: string) {
+  const columns = db.exec(`PRAGMA table_info(${table})`)[0]?.values || [];
+  const exists = columns.some((row) => String(row[1] || "") === column);
+  if (!exists) db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 async function saveDatabase(db: Database) {
@@ -141,8 +165,25 @@ async function withDatabase<T>(fn: (db: Database) => T | Promise<T>, save = fals
   return next;
 }
 
+function parseStoredJson(value: unknown): unknown | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function stringifyStoredJson(value: unknown): string {
+  return JSON.stringify(value);
+}
+
 function mapRow(row: unknown[]): PublicConfigRecord {
-  const [id, name, baseUrl, apiKey, model, createdAt] = row;
+  const [id, name, baseUrl, apiKey, model, createdAt, lastTestJson, probeJson, benchmarksJson] = row;
+  const lastTest = parseStoredJson(lastTestJson);
+  const probe = parseStoredJson(probeJson);
+  const benchmarks = parseStoredJson(benchmarksJson);
+
   return {
     id: String(id || ""),
     name: String(name || ""),
@@ -150,6 +191,10 @@ function mapRow(row: unknown[]): PublicConfigRecord {
     apiKey: String(apiKey || ""),
     model: String(model || ""),
     createdAt: String(createdAt || ""),
+    isPublic: true,
+    ...(lastTest ? { lastTest } : {}),
+    ...(probe ? { probe } : {}),
+    ...(benchmarks ? { benchmarks } : {}),
     sourceMeta: {
       kind: "manual"
     }
@@ -159,7 +204,7 @@ function mapRow(row: unknown[]): PublicConfigRecord {
 export async function listPublicConfigs(): Promise<PublicConfigRecord[]> {
   return withDatabase((db) => {
     const result = db.exec(`
-      SELECT id, name, base_url, api_key, model, created_at
+      SELECT id, name, base_url, api_key, model, created_at, last_test_json, probe_json, benchmarks_json
       FROM public_configs
       ORDER BY created_at DESC
     `);
@@ -207,10 +252,58 @@ export async function createPublicConfig(input: PublicConfigInput): Promise<Publ
     apiKey,
     model,
     createdAt,
+    isPublic: true,
     sourceMeta: {
       kind: "manual"
     }
   };
+}
+
+export async function updatePublicConfigResults(id: string, input: PublicConfigResultInput): Promise<void> {
+  const trimmedId = id.trim();
+  if (!trimmedId) throw new Error("公开配置 ID 不能为空");
+
+  const assignments: string[] = [];
+  const values: string[] = [];
+
+  if (typeof input.model === "string") {
+    assignments.push("model = ?");
+    values.push(input.model.trim());
+  }
+  if (typeof input.lastTest !== "undefined") {
+    assignments.push("last_test_json = ?");
+    values.push(stringifyStoredJson(input.lastTest));
+  }
+  if (typeof input.probe !== "undefined") {
+    assignments.push("probe_json = ?");
+    values.push(stringifyStoredJson(input.probe));
+  }
+  if (typeof input.benchmarks !== "undefined") {
+    assignments.push("benchmarks_json = ?");
+    values.push(stringifyStoredJson(input.benchmarks));
+  }
+
+  if (assignments.length === 0) return;
+
+  assignments.push("updated_at = ?");
+  values.push(new Date().toISOString(), trimmedId);
+
+  await withDatabase(
+    (db) => {
+      db.run(
+        `
+          UPDATE public_configs
+          SET ${assignments.join(", ")}
+          WHERE id = ?
+        `,
+        values
+      );
+      if (db.getRowsModified() === 0) {
+        throw new Error("公开配置不存在");
+      }
+    },
+    true
+  );
 }
 
 export async function listPreferredModels(): Promise<string[]> {
