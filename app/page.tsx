@@ -9,6 +9,7 @@ import {
   FaChevronDown,
   FaChevronUp,
   FaCopy,
+  FaDatabase,
   FaEdit,
   FaExchangeAlt,
   FaExternalLinkAlt,
@@ -162,7 +163,9 @@ type BenchmarkRankingEntry = {
   successRate?: number;
   testedAt: string;
   source: "benchmark" | "test";
+  isPublic: boolean;
 };
+type RankingFilter = "all" | "test" | "benchmark" | "public";
 type ParsedConfig = FormState & {
   sourceMeta?: KeyConfig["sourceMeta"];
 };
@@ -175,6 +178,10 @@ type PublicConfigListResponse = {
 };
 type PublicConfigSaveResponse = {
   config?: unknown;
+};
+type PublicConfigDeleteResponse = {
+  ok?: boolean;
+  deleted?: number;
 };
 type PreferredModelsResponse = {
   models?: unknown[];
@@ -204,6 +211,7 @@ const MODEL_TAG_RULES: { tag: string; patterns: RegExp[] }[] = [
   { tag: "rerank", patterns: [/rerank/i, /reranker/i] },
   { tag: "moderation", patterns: [/moderation/i] }
 ];
+const CONFIG_SEARCH_SHORTCUTS = ["SQLite", "公开", "thinking", "embedding", "image", "coding"];
 const CC_SWITCH_APPS: { value: CcSwitchApp; label: string }[] = [
   { value: "claude", label: "Claude" },
   { value: "codex", label: "Codex" },
@@ -1243,7 +1251,8 @@ function buildBenchmarkRankingEntry(
     firstTokenMedianMs: benchmark.speed.firstTokenMedianMs,
     successRate: benchmark.speed.successRate,
     testedAt: benchmark.testedAt,
-    source: "benchmark"
+    source: "benchmark",
+    isPublic: false
   };
 }
 
@@ -1263,7 +1272,8 @@ function buildTestRankingEntry(
     firstTokenMedianMs: testResult.firstTokenMs,
     successRate: undefined,
     testedAt: testResult.testedAt,
-    source: "test"
+    source: "test",
+    isPublic: false
   };
 }
 
@@ -1281,6 +1291,49 @@ function sortBenchmarkRankingEntries(entries: BenchmarkRankingEntry[]): Benchmar
 
     return new Date(right.testedAt).getTime() - new Date(left.testedAt).getTime();
   });
+}
+
+function buildRankingEntries(
+  sourceConfigs: KeyConfig[],
+  benchmarkMap: Record<string, Record<string, ModelBenchmarkResult>>,
+  resultMap: Record<string, TestResult>,
+  filter: RankingFilter,
+  search: string
+): BenchmarkRankingEntry[] {
+  const benchmarkEntries = sourceConfigs.flatMap((item) => {
+    const runtimeBenchmarks = benchmarkMap[item.id] || {};
+    return collectFinishedBenchmarks(item, runtimeBenchmarks)
+      .map((benchmark) => buildBenchmarkRankingEntry(item.id, item.name || item.model || "未命名配置", benchmark))
+      .map((entry) => (entry ? { ...entry, isPublic: item.isPublic === true } : null))
+      .filter((entry): entry is BenchmarkRankingEntry => Boolean(entry));
+  });
+
+  const testEntries = sourceConfigs
+    .map((item) => {
+      const testResult = resultMap[item.id] || item.lastTest;
+      if (!isFinishedTestResult(testResult)) return null;
+      const entry = buildTestRankingEntry(item.id, item.name || item.model || "未命名配置", item.model, testResult);
+      return entry ? { ...entry, isPublic: item.isPublic === true } : null;
+    })
+    .filter((entry): entry is BenchmarkRankingEntry => Boolean(entry));
+
+  const allEntries = [...benchmarkEntries, ...testEntries];
+  const filteredByType =
+    filter === "all"
+      ? allEntries
+      : filter === "public"
+        ? allEntries.filter((entry) => entry.isPublic)
+        : allEntries.filter((entry) => entry.source === filter);
+  const searchLower = search.toLowerCase().trim();
+  const filteredBySearch = searchLower
+    ? filteredByType.filter(
+        (entry) =>
+          entry.model.toLowerCase().includes(searchLower) ||
+          entry.configName.toLowerCase().includes(searchLower)
+      )
+    : filteredByType;
+
+  return sortBenchmarkRankingEntries(filteredBySearch);
 }
 
 function buildBenchmarkSummary(
@@ -1411,6 +1464,24 @@ function getSourceBadge(meta?: KeyConfig["sourceMeta"]): string {
   return "手动";
 }
 
+function getConfigSearchTokens(item: KeyConfig): string[] {
+  const tags = uniqueStrings([
+    ...inferModelTags(item.model),
+    ...Object.values(item.benchmarks || {}).flatMap((benchmark) => benchmark.tags || [])
+  ]);
+  const sourceBadge = getSourceBadge(item.sourceMeta);
+  const publicTokens = item.isPublic ? ["sqlite", "public", "公开", "共享", "数据库", "服务端"] : [];
+
+  return [
+    item.name,
+    item.baseUrl,
+    item.model,
+    sourceBadge,
+    ...tags,
+    ...publicTokens
+  ].filter(Boolean);
+}
+
 async function fetchJsonWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
@@ -1457,6 +1528,30 @@ async function patchJsonWithTimeout<TResponse>(url: string, body: unknown, timeo
     url,
     {
       method: "PATCH",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    },
+    timeoutMs
+  )) as TResponse;
+}
+
+async function deleteJsonWithTimeout<TResponse>(url: string, timeoutMs: number): Promise<TResponse> {
+  return (await fetchJsonWithTimeout(
+    url,
+    {
+      method: "DELETE"
+    },
+    timeoutMs
+  )) as TResponse;
+}
+
+async function deleteJsonBodyWithTimeout<TResponse>(url: string, body: unknown, timeoutMs: number): Promise<TResponse> {
+  return (await fetchJsonWithTimeout(
+    url,
+    {
+      method: "DELETE",
       headers: {
         "Content-Type": "application/json"
       },
@@ -1735,7 +1830,7 @@ export default function Home() {
   const [benchmarkDialogId, setBenchmarkDialogId] = useState<string | null>(null);
   const [configSearch, setConfigSearch] = useState("");
   const [configStatusFilter, setConfigStatusFilter] = useState<"all" | TestStatus>("all");
-  const [rankingFilter, setRankingFilter] = useState<"all" | "test" | "benchmark">("all");
+  const [rankingFilter, setRankingFilter] = useState<RankingFilter>("all");
   const [rankingSearch, setRankingSearch] = useState("");
   const [benchmarkSearch, setBenchmarkSearch] = useState("");
   const [benchmarkRoundsInput, setBenchmarkRoundsInput] = useState(String(DEFAULT_BENCHMARK_ROUNDS));
@@ -1863,11 +1958,7 @@ export default function Home() {
 
     return configs.filter((item) => {
       const result = resultMap[item.id] || item.lastTest || defaultTestResult();
-      const matchesSearch =
-        !query ||
-        item.name.toLowerCase().includes(query) ||
-        item.baseUrl.toLowerCase().includes(query) ||
-        item.model.toLowerCase().includes(query);
+      const matchesSearch = !query || getConfigSearchTokens(item).some((token) => token.toLowerCase().includes(query));
       const matchesStatus = configStatusFilter === "all" || result.status === configStatusFilter;
       return matchesSearch && matchesStatus;
     });
@@ -2210,36 +2301,7 @@ export default function Home() {
     };
   }, [activeBenchmarkChartResult]);
   const configBenchmarkRanking = useMemo(() => {
-    const benchmarkEntries = configs.flatMap((item) => {
-      const runtimeBenchmarks = benchmarkMap[item.id] || {};
-      return collectFinishedBenchmarks(item, runtimeBenchmarks)
-        .map((benchmark) => buildBenchmarkRankingEntry(item.id, item.name || item.model || "未命名配置", benchmark))
-        .filter((entry): entry is BenchmarkRankingEntry => Boolean(entry));
-    });
-
-    const testEntries = configs
-      .map((item) => {
-        const testResult = resultMap[item.id] || item.lastTest;
-        if (!isFinishedTestResult(testResult)) return null;
-        return buildTestRankingEntry(item.id, item.name || item.model || "未命名配置", item.model, testResult);
-      })
-      .filter((entry): entry is BenchmarkRankingEntry => Boolean(entry));
-
-    const allEntries = [...benchmarkEntries, ...testEntries];
-
-    const filteredByType = rankingFilter === "all"
-      ? allEntries
-      : allEntries.filter(entry => entry.source === rankingFilter);
-
-    const searchLower = rankingSearch.toLowerCase().trim();
-    const filteredBySearch = searchLower
-      ? filteredByType.filter(entry =>
-          entry.model.toLowerCase().includes(searchLower) ||
-          entry.configName.toLowerCase().includes(searchLower)
-        )
-      : filteredByType;
-
-    return sortBenchmarkRankingEntries(filteredBySearch);
+    return buildRankingEntries(configs, benchmarkMap, resultMap, rankingFilter, rankingSearch);
   }, [benchmarkMap, configs, resultMap, rankingFilter, rankingSearch]);
 
   useEffect(() => {
@@ -2533,7 +2595,7 @@ export default function Home() {
     }
   }
 
-  function removeConfig(id: string) {
+  function removeConfigLocally(id: string) {
     setConfigs((prev) => prev.filter((i) => i.id !== id));
     setResultMap((prev) => {
       const next = { ...prev };
@@ -2563,17 +2625,64 @@ export default function Home() {
     if (benchmarkDialogId === id) {
       setBenchmarkDialogId(null);
     }
-    setNotice("已删除");
   }
 
-  function removeAllConfigs() {
+  async function removeConfig(id: string) {
+    const target = configs.find((item) => item.id === id);
+    if (!target) return;
+
+    const confirmed = window.confirm(
+      target.isPublic
+        ? `确认删除「${target.name}」吗？这会同步删除 SQLite 中的公开配置。`
+        : `确认删除「${target.name}」吗？此操作不可恢复。`
+    );
+    if (!confirmed) return;
+
+    if (target.isPublic) {
+      try {
+        setNotice("正在删除 SQLite 公开配置...");
+        await deleteJsonWithTimeout<PublicConfigDeleteResponse>(
+          `/api/public-configs/${encodeURIComponent(id)}`,
+          15000
+        );
+      } catch (error: unknown) {
+        setNotice(`删除 SQLite 公开配置失败：${getErrorMessage(error) || "请稍后重试"}`);
+        return;
+      }
+    }
+
+    removeConfigLocally(id);
+    setNotice(target.isPublic ? "已删除 SQLite 公开配置" : "已删除");
+  }
+
+  async function removeAllConfigs() {
     if (configs.length === 0) {
       setNotice("暂无配置可删除");
       return;
     }
 
-    const confirmed = window.confirm(`确认删除全部 ${configs.length} 条配置吗？此操作不可恢复。`);
+    const publicIds = configs.filter((item) => item.isPublic).map((item) => item.id);
+    const publicCount = publicIds.length;
+    const confirmed = window.confirm(
+      publicCount > 0
+        ? `确认删除全部 ${configs.length} 条配置吗？其中 ${publicCount} 条会同步删除 SQLite 中的公开配置，此操作不可恢复。`
+        : `确认删除全部 ${configs.length} 条配置吗？此操作不可恢复。`
+    );
     if (!confirmed) return;
+
+    if (publicIds.length > 0) {
+      try {
+        setNotice("正在删除 SQLite 公开配置...");
+        await deleteJsonBodyWithTimeout<PublicConfigDeleteResponse>(
+          "/api/public-configs",
+          { ids: publicIds },
+          15000
+        );
+      } catch (error: unknown) {
+        setNotice(`删除 SQLite 公开配置失败：${getErrorMessage(error) || "请稍后重试"}`);
+        return;
+      }
+    }
 
     setConfigs([]);
     setResultMap({});
@@ -3489,6 +3598,135 @@ export default function Home() {
     setNotice(`已应用模型：${model}`);
   }
 
+  function renderRankingPanel({
+    title,
+    description,
+    entries,
+    filter,
+    onFilterChange,
+    search,
+    onSearchChange,
+    emptyText
+  }: {
+    title: string;
+    description: string;
+    entries: BenchmarkRankingEntry[];
+    filter: RankingFilter;
+    onFilterChange: (value: RankingFilter) => void;
+    search: string;
+    onSearchChange: (value: string) => void;
+    emptyText: string;
+  }) {
+    return (
+      <aside className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3 shadow-sm">
+        <div>
+          <p className="text-sm font-semibold text-emerald-900">{title}</p>
+          <p className="mt-1 text-xs text-emerald-700">{description}</p>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {[
+            { label: "全部排行", value: "all" },
+            { label: "普通测试", value: "test" },
+            { label: "性能测试", value: "benchmark" },
+            { label: "公开配置", value: "public" }
+          ].map((option) => {
+            const active = filter === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => onFilterChange(option.value as RankingFilter)}
+                className={`cursor-pointer rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                  active
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-800"
+                }`}
+                aria-pressed={active}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-3">
+          <ClearableField value={search} onClear={() => onSearchChange("")}>
+            <input
+              type="text"
+              placeholder="搜索模型或配置名称..."
+              value={search}
+              onChange={(e) => onSearchChange(e.target.value)}
+              className={`${inputClass} pr-10`}
+            />
+          </ClearableField>
+        </div>
+
+        {entries.length > 0 ? (
+          <div className="mt-3 grid gap-2">
+            {entries.map((entry, index) => {
+              const config = configs.find((item) => item.id === entry.configId);
+              return (
+                <div
+                  key={`${entry.configId}-${entry.source}-${entry.model}-${entry.testedAt}`}
+                  className="flex cursor-pointer select-none items-start gap-3 rounded-xl border border-white/80 bg-white/90 p-3 shadow-sm"
+                  title="双击筛选该配置"
+                  onDoubleClick={() => {
+                    setConfigSearch(entry.configName);
+                    setConfigStatusFilter("all");
+                    configListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }}
+                >
+                  <div className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-sm font-semibold text-white">
+                    {index + 1}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-zinc-900">{entry.model}</p>
+                        <div className="mt-0.5 flex items-center gap-2">
+                          <p className="truncate text-xs text-zinc-600">配置：{entry.configName}</p>
+                          {config?.isPublic ? (
+                            <span className="rounded-full border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-700">
+                              公开
+                            </span>
+                          ) : null}
+                          {config && config.baseUrl && config.apiKey ? (
+                            <button
+                              type="button"
+                              className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 transition hover:bg-emerald-100"
+                              onClick={() => openCcSwitchDialog(config, entry.model)}
+                              title="导出到 CC Switch"
+                            >
+                              <FaExternalLinkAlt aria-hidden />
+                              <span>导出</span>
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className="text-sm font-semibold text-emerald-700">{formatDurationLabel(entry.medianMs)}</p>
+                      </div>
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-500">
+                      <p>测试：{toMonthDayHourMinuteLabel(entry.testedAt)}</p>
+                      {typeof entry.firstTokenMedianMs === "number" ? <p>首字：{formatDurationLabel(entry.firstTokenMedianMs)}</p> : null}
+                      {typeof entry.successRate === "number" ? <p>成功率：{formatSuccessRateLabel(entry.successRate)}</p> : null}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="mt-3 rounded-xl border border-dashed border-emerald-200 bg-white/70 px-3 py-4 text-sm text-emerald-800">
+            {search ? "未找到匹配的测速数据" : emptyText}
+          </div>
+        )}
+      </aside>
+    );
+  }
+
   return (
     <main className="mx-auto w-full max-w-[1600px] space-y-3 px-3 py-4 text-zinc-900 sm:px-4">
       <header className="grid gap-3 xl:grid-cols-[minmax(16rem,0.6fr)_minmax(0,1.35fr)_380px]">
@@ -3778,9 +4016,28 @@ export default function Home() {
                   className={`${inputClass} pr-10`}
                   value={configSearch}
                   onChange={(e) => setConfigSearch(e.target.value)}
-                  placeholder="搜索名称 / 地址 / 模型"
+                  placeholder="搜索名称 / 地址 / 模型 / 标签 / SQLite"
                 />
               </ClearableField>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {CONFIG_SEARCH_SHORTCUTS.map((shortcut) => {
+                  const active = configSearch.trim().toLowerCase() === shortcut.toLowerCase();
+                  return (
+                    <button
+                      key={shortcut}
+                      type="button"
+                      className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
+                        active
+                          ? "border-zinc-900 bg-zinc-900 text-white"
+                          : "border-zinc-200 bg-zinc-50 text-zinc-600 hover:border-zinc-300 hover:bg-white"
+                      }`}
+                      onClick={() => setConfigSearch(active ? "" : shortcut)}
+                    >
+                      {shortcut}
+                    </button>
+                  );
+                })}
+              </div>
               <div className="flex flex-wrap items-center gap-2">
                 {[
                   { value: "all", label: "全部状态" },
@@ -3963,6 +4220,12 @@ export default function Home() {
                           <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-[11px] font-medium text-zinc-600">
                             {getSourceBadge(item.sourceMeta)}
                           </span>
+                          {item.isPublic ? (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-[11px] font-semibold text-sky-700">
+                              <FaDatabase aria-hidden />
+                              <span>公开</span>
+                            </span>
+                          ) : null}
                           {excludedFromBatchTest ? (
                             <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700">
                               已排除一键测试
@@ -4326,106 +4589,16 @@ export default function Home() {
           ) : null}
         </section>
 
-        <aside className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3 shadow-sm">
-          <div>
-            <p className="text-sm font-semibold text-emerald-900">成功测速排行榜</p>
-            <p className="mt-1 text-xs text-emerald-700">按中位耗时从快到慢排序，仅展示测试成功的模型</p>
-          </div>
-
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            {[
-              { label: "全部排行", value: "all" },
-              { label: "普通测试", value: "test" },
-              { label: "性能测试", value: "benchmark" }
-            ].map((option) => {
-              const active = rankingFilter === option.value;
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => setRankingFilter(option.value as "all" | "test" | "benchmark")}
-                  className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
-                    active
-                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                      : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-800"
-                  }`}
-                  aria-pressed={active}
-                >
-                  {option.label}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="mt-3">
-            <ClearableField value={rankingSearch} onClear={() => setRankingSearch("")}>
-              <input
-                type="text"
-                placeholder="搜索模型或配置名称..."
-                value={rankingSearch}
-                onChange={(e) => setRankingSearch(e.target.value)}
-                className={`${inputClass} pr-10`}
-              />
-            </ClearableField>
-          </div>
-
-          {configBenchmarkRanking.length > 0 ? (
-            <div className="mt-3 grid gap-2">
-              {configBenchmarkRanking.map((entry, index) => {
-                const config = configs.find(c => c.id === entry.configId);
-                return (
-                  <div
-                    key={`${entry.configName}-${entry.model}-${entry.testedAt}`}
-                    className="flex items-start gap-3 rounded-xl border border-white/80 bg-white/90 p-3 shadow-sm cursor-pointer select-none"
-                    title="双击筛选该配置"
-                    onDoubleClick={() => {
-                      setConfigSearch(entry.configName);
-                      setConfigStatusFilter("all");
-                      configListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-                    }}
-                  >
-                    <div className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-sm font-semibold text-white">
-                      {index + 1}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-semibold text-zinc-900">{entry.model}</p>
-                          <div className="mt-0.5 flex items-center gap-2">
-                            <p className="truncate text-xs text-zinc-600">配置：{entry.configName}</p>
-                            {config && config.baseUrl && config.apiKey ? (
-                              <button
-                                type="button"
-                                className="inline-flex shrink-0 items-center gap-1 rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 transition hover:bg-emerald-100"
-                                onClick={() => openCcSwitchDialog(config, entry.model)}
-                                title="导出到 CC Switch"
-                              >
-                                <FaExternalLinkAlt aria-hidden />
-                                <span>导出</span>
-                              </button>
-                            ) : null}
-                          </div>
-                        </div>
-                        <div className="shrink-0 text-right">
-                          <p className="text-sm font-semibold text-emerald-700">{formatDurationLabel(entry.medianMs)}</p>
-                        </div>
-                      </div>
-                      <div className="mt-1 flex items-center gap-3 text-[11px] text-zinc-500">
-                        <p>测试：{toMonthDayHourMinuteLabel(entry.testedAt)}</p>
-                        {typeof entry.firstTokenMedianMs === "number" ? <p>首字：{formatDurationLabel(entry.firstTokenMedianMs)}</p> : null}
-                        {typeof entry.successRate === "number" ? <p>成功率：{formatSuccessRateLabel(entry.successRate)}</p> : null}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="mt-3 rounded-xl border border-dashed border-emerald-200 bg-white/70 px-3 py-4 text-sm text-emerald-800">
-              {rankingSearch ? "未找到匹配的测速数据" : "暂无测速数据，请先进行性能评测"}
-            </div>
-          )}
-        </aside>
+        {renderRankingPanel({
+          title: "成功测速排行榜",
+          description: "按中位耗时从快到慢排序，可筛选普通测试、性能测试或公开配置",
+          entries: configBenchmarkRanking,
+          filter: rankingFilter,
+          onFilterChange: setRankingFilter,
+          search: rankingSearch,
+          onSearchChange: setRankingSearch,
+          emptyText: "暂无测速数据，请先进行性能评测"
+        })}
       </div>
 
       {ccSwitchDialogItem ? (

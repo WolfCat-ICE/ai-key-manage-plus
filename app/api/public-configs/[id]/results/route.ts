@@ -17,7 +17,8 @@ export async function PATCH(
     await updatePublicConfigResults(decodeURIComponent(id), {
       model: typeof body.model === "string" ? body.model : undefined,
       lastTest: typeof body.lastTest === "undefined" ? undefined : body.lastTest,
-      probe: typeof body.probe === "undefined" ? undefined : body.probe
+      probe: typeof body.probe === "undefined" ? undefined : body.probe,
+      benchmarks: typeof body.benchmarks === "undefined" ? undefined : body.benchmarks
     });
 
     return NextResponse.json({ ok: true });
