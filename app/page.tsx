@@ -211,7 +211,7 @@ const MODEL_TAG_RULES: { tag: string; patterns: RegExp[] }[] = [
   { tag: "rerank", patterns: [/rerank/i, /reranker/i] },
   { tag: "moderation", patterns: [/moderation/i] }
 ];
-const CONFIG_SEARCH_SHORTCUTS = ["SQLite", "公开", "thinking", "embedding", "image", "coding"];
+const CONFIG_SEARCH_SHORTCUTS = ["公开", "私人", "gpt", "claude", "glm"];
 const CC_SWITCH_APPS: { value: CcSwitchApp; label: string }[] = [
   { value: "claude", label: "Claude" },
   { value: "codex", label: "Codex" },
@@ -1470,7 +1470,7 @@ function getConfigSearchTokens(item: KeyConfig): string[] {
     ...Object.values(item.benchmarks || {}).flatMap((benchmark) => benchmark.tags || [])
   ]);
   const sourceBadge = getSourceBadge(item.sourceMeta);
-  const publicTokens = item.isPublic ? ["sqlite", "public", "公开", "共享", "数据库", "服务端"] : [];
+  const publicTokens = item.isPublic ? ["sqlite", "public", "公开", "共享", "数据库", "服务端"] : ["private", "私人", "本地"];
 
   return [
     item.name,
@@ -1829,6 +1829,7 @@ export default function Home() {
   const [probeDialogId, setProbeDialogId] = useState<string | null>(null);
   const [benchmarkDialogId, setBenchmarkDialogId] = useState<string | null>(null);
   const [configSearch, setConfigSearch] = useState("");
+  const [configShortcutFilter, setConfigShortcutFilter] = useState("");
   const [configStatusFilter, setConfigStatusFilter] = useState<"all" | TestStatus>("all");
   const [rankingFilter, setRankingFilter] = useState<RankingFilter>("all");
   const [rankingSearch, setRankingSearch] = useState("");
@@ -1955,14 +1956,17 @@ export default function Home() {
   const batchTestableConfigs = useMemo(() => configs.filter((item) => !item.excludeFromBatchTest), [configs]);
   const filteredConfigs = useMemo(() => {
     const query = deferredConfigSearch.trim().toLowerCase();
+    const shortcut = configShortcutFilter.trim().toLowerCase();
 
     return configs.filter((item) => {
       const result = resultMap[item.id] || item.lastTest || defaultTestResult();
-      const matchesSearch = !query || getConfigSearchTokens(item).some((token) => token.toLowerCase().includes(query));
+      const searchTokens = getConfigSearchTokens(item);
+      const matchesSearch = !query || searchTokens.some((token) => token.toLowerCase().includes(query));
+      const matchesShortcut = !shortcut || searchTokens.some((token) => token.toLowerCase().includes(shortcut));
       const matchesStatus = configStatusFilter === "all" || result.status === configStatusFilter;
-      return matchesSearch && matchesStatus;
+      return matchesSearch && matchesShortcut && matchesStatus;
     });
-  }, [deferredConfigSearch, configStatusFilter, configs, resultMap]);
+  }, [configShortcutFilter, deferredConfigSearch, configStatusFilter, configs, resultMap]);
   const visibleConfigs = useMemo(
     () => filteredConfigs.slice(0, visibleConfigCount),
     [filteredConfigs, visibleConfigCount]
@@ -1987,7 +1991,7 @@ export default function Home() {
 
   useEffect(() => {
     setVisibleConfigCount(CONFIG_LIST_INITIAL_COUNT);
-  }, [deferredConfigSearch, configStatusFilter]);
+  }, [configShortcutFilter, deferredConfigSearch, configStatusFilter]);
   const ccSwitchDialogItem = useMemo(
     () => configs.find((item) => item.id === ccSwitchDialogId) || null,
     [configs, ccSwitchDialogId]
@@ -2592,6 +2596,94 @@ export default function Home() {
       void autoProbeAndTestConfig(item);
     } catch (error: unknown) {
       setNotice(`保存并公开失败：${getErrorMessage(error) || "请稍后重试"}`);
+    }
+  }
+
+  async function publishExistingConfig(id: string) {
+    const target = configs.find((item) => item.id === id);
+    if (!target || target.isPublic) return;
+
+    const baseUrl = normalizeBaseUrl(target.baseUrl);
+    const apiKey = cleanKey(target.apiKey);
+    if (!baseUrl || !apiKey) {
+      setNotice("转公开失败：地址和 Key 不能为空");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `确认将「${target.name}」转为公开配置吗？完整 Key 会写入服务端 SQLite，其他能访问此服务的人可能读取这条配置。`
+    );
+    if (!confirmed) return;
+
+    try {
+      setNotice("正在转为公开配置...");
+      const response = await postJsonWithTimeout<PublicConfigSaveResponse>(
+        "/api/public-configs",
+        {
+          id: target.id,
+          name: target.name,
+          baseUrl,
+          apiKey,
+          model: target.model,
+          createdAt: target.createdAt
+        },
+        15000
+      );
+      const publicItem = normalizePublicConfigSave(response);
+      if (!publicItem) {
+        setNotice("已写入 SQLite，但返回数据无法识别");
+        return;
+      }
+
+      const nextItem: KeyConfig = {
+        ...target,
+        ...publicItem,
+        lastTest: target.lastTest,
+        probe: target.probe,
+        benchmarks: target.benchmarks
+      };
+      setConfigs((prev) => prev.map((item) => (item.id === id ? nextItem : item)));
+
+      const resultBody = {
+        model: nextItem.model,
+        ...(nextItem.lastTest ? { lastTest: nextItem.lastTest } : {}),
+        ...(nextItem.probe ? { probe: nextItem.probe } : {}),
+        ...(nextItem.benchmarks ? { benchmarks: nextItem.benchmarks } : {})
+      };
+      if (nextItem.lastTest || nextItem.probe || nextItem.benchmarks) {
+        persistPublicConfigResults(nextItem.id, resultBody);
+      }
+
+      setNotice("已转为公开配置");
+    } catch (error: unknown) {
+      setNotice(`转公开失败：${getErrorMessage(error) || "请稍后重试"}`);
+    }
+  }
+
+  async function privatizeConfig(id: string) {
+    const target = configs.find((item) => item.id === id);
+    if (!target?.isPublic) return;
+
+    const confirmed = window.confirm(
+      `确认将「${target.name}」转为私人配置吗？这会从服务端 SQLite 删除公开记录，但会保留在当前浏览器本地。`
+    );
+    if (!confirmed) return;
+
+    try {
+      setNotice("正在转为私人配置...");
+      await deleteJsonWithTimeout<PublicConfigDeleteResponse>(
+        `/api/public-configs/${encodeURIComponent(id)}`,
+        15000
+      );
+      setConfigs((prev) => prev.map((item) => (item.id === id ? { ...item, isPublic: false } : item)));
+      setNotice("已转为私人配置");
+    } catch (error: unknown) {
+      if (isRecord(error) && error.status === 404) {
+        setConfigs((prev) => prev.map((item) => (item.id === id ? { ...item, isPublic: false } : item)));
+        setNotice("公开记录已不存在，已转为私人配置");
+        return;
+      }
+      setNotice(`转私人失败：${getErrorMessage(error) || "请稍后重试"}`);
     }
   }
 
@@ -4016,29 +4108,10 @@ export default function Home() {
                   className={`${inputClass} pr-10`}
                   value={configSearch}
                   onChange={(e) => setConfigSearch(e.target.value)}
-                  placeholder="搜索名称 / 地址 / 模型 / 标签 / SQLite"
+                  placeholder="搜索名称 / 地址 / 模型 / 标签"
                 />
               </ClearableField>
               <div className="flex flex-wrap items-center gap-1.5">
-                {CONFIG_SEARCH_SHORTCUTS.map((shortcut) => {
-                  const active = configSearch.trim().toLowerCase() === shortcut.toLowerCase();
-                  return (
-                    <button
-                      key={shortcut}
-                      type="button"
-                      className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
-                        active
-                          ? "border-zinc-900 bg-zinc-900 text-white"
-                          : "border-zinc-200 bg-zinc-50 text-zinc-600 hover:border-zinc-300 hover:bg-white"
-                      }`}
-                      onClick={() => setConfigSearch(active ? "" : shortcut)}
-                    >
-                      {shortcut}
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
                 {[
                   { value: "all", label: "全部状态" },
                   { value: "idle", label: "未测试" },
@@ -4060,6 +4133,25 @@ export default function Home() {
                       aria-pressed={active}
                     >
                       {option.label} {configStatusCounts[option.value as "all" | TestStatus]}
+                    </button>
+                  );
+                })}
+                <span className="mx-1 hidden h-5 w-px bg-zinc-200 sm:inline-block" aria-hidden />
+                {CONFIG_SEARCH_SHORTCUTS.map((shortcut) => {
+                  const active = configShortcutFilter.trim().toLowerCase() === shortcut.toLowerCase();
+                  return (
+                    <button
+                      key={shortcut}
+                      type="button"
+                      className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
+                        active
+                          ? "border-zinc-900 bg-zinc-900 text-white"
+                          : "border-zinc-200 bg-zinc-50 text-zinc-600 hover:border-zinc-300 hover:bg-white"
+                      }`}
+                      onClick={() => setConfigShortcutFilter(active ? "" : shortcut)}
+                      aria-pressed={active}
+                    >
+                      {shortcut}
                     </button>
                   );
                 })}
@@ -4228,7 +4320,7 @@ export default function Home() {
                           ) : null}
                           {excludedFromBatchTest ? (
                             <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700">
-                              已排除一键测试
+                              已排除测试
                             </span>
                           ) : null}
                         </div>
@@ -4496,7 +4588,7 @@ export default function Home() {
                               aria-label={excludedFromBatchTest ? "恢复参与一键测试" : "排除出一键测试"}
                             >
                               <FaTag aria-hidden />
-                              <span>{excludedFromBatchTest ? "恢复批量测试" : "排除一键测试"}</span>
+                              <span>{excludedFromBatchTest ? "恢复批量测试" : "排除测试"}</span>
                             </button>
                             <button
                               type="button"
@@ -4539,6 +4631,20 @@ export default function Home() {
                               label="导出·CC"
                               size="small"
                             />
+                            <button
+                              type="button"
+                              className={
+                                item.isPublic
+                                  ? smallBtn
+                                  : `${smallBtn} border-sky-200 bg-sky-50 text-sky-700 hover:border-sky-300 hover:bg-sky-100`
+                              }
+                              onClick={() => (item.isPublic ? privatizeConfig(item.id) : publishExistingConfig(item.id))}
+                              title={item.isPublic ? "转为私人配置" : "转为公开配置"}
+                              aria-label={item.isPublic ? "转为私人配置" : "转为公开配置"}
+                            >
+                              <FaDatabase aria-hidden />
+                              <span>{item.isPublic ? "转私人" : "转公开"}</span>
+                            </button>
                             <button
                               type="button"
                               className={smallBtn}

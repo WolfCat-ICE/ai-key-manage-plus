@@ -14,10 +14,12 @@ export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as Partial<PublicConfigInput>;
     const config = await createPublicConfig({
+      id: typeof body.id === "string" ? body.id : undefined,
       name: typeof body.name === "string" ? body.name : "",
       baseUrl: typeof body.baseUrl === "string" ? body.baseUrl : "",
       apiKey: typeof body.apiKey === "string" ? body.apiKey : "",
-      model: typeof body.model === "string" ? body.model : ""
+      model: typeof body.model === "string" ? body.model : "",
+      createdAt: typeof body.createdAt === "string" ? body.createdAt : undefined
     });
 
     return NextResponse.json({ config });
